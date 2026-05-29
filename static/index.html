@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>人才地图本地版</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <section id="loginScreen" class="login">
+      <div class="login-panel">
+        <p class="eyebrow">Local Talent Intelligence</p>
+        <h1>人才地图本地版</h1>
+        <p class="login-copy">面向企业 HR 的视频创作人才地图工具。数据默认保存在本机，只处理公开可读或企业授权的数据。</p>
+        <form id="loginForm" class="form">
+          <div class="field">
+            <label for="loginEmail">邮箱</label>
+            <input id="loginEmail" autocomplete="username" />
+          </div>
+          <div class="field">
+            <label for="loginPassword">密码</label>
+            <input id="loginPassword" type="password" autocomplete="current-password" />
+          </div>
+          <button class="primary" type="submit">登录</button>
+          <p class="fine muted">请输入管理员提供的账号登录。</p>
+        </form>
+      </div>
+      <div class="login-art">
+        <div class="login-board" aria-hidden="true">
+          <div class="board-top"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+          <div class="board-body">
+            <div class="mini-row"><strong>杭州</strong><span>视频创作 / 品牌内容 / AIGC</span><span class="mini-pill">42人</span></div>
+            <div class="mini-row"><strong>抖音</strong><span>爆款选题、商业转化、账号案例</span><span class="mini-pill">18条</span></div>
+            <div class="mini-row"><strong>小红书</strong><span>审美调性、品牌植入、图文视频</span><span class="mini-pill">12条</span></div>
+            <div class="mini-row"><strong>B站</strong><span>知识科普、脚本、长视频剪辑</span><span class="mini-pill">9条</span></div>
+            <div class="mini-row"><strong>AI辅助</strong><span>公开视频 + 授权文件 + 人工确认</span><span class="mini-pill">合规</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="appShell" class="shell hidden">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">TM</div>
+          <div class="brand-title">人才地图</div>
+          <div class="brand-subtitle">本地工作台</div>
+        </div>
+        <nav class="nav">
+          <button data-view="wizard" class="nav-item active">创建项目</button>
+          <button data-view="candidates" class="nav-item">候选人</button>
+          <button data-view="maps" class="nav-item">地图</button>
+          <button data-view="imports" class="nav-item">导入导出</button>
+          <button data-view="settings" class="nav-item">设置</button>
+        </nav>
+        <div class="project-panel">
+          <div class="panel-label"><span>项目</span><button class="quiet" data-action="new-project" type="button">新建</button></div>
+          <div id="projectList" class="project-list"></div>
+        </div>
+        <div class="user-strip">
+          <span id="userBadge">未登录</span>
+          <button id="logoutBtn" class="quiet" type="button">退出</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+        <div class="top-title">
+          <p id="viewLabel" class="eyebrow"></p>
+          <h2 id="pageTitle">通过 AI 问答检索你的候选人</h2>
+          </div>
+          <div class="top-actions">
+            <button id="refreshBtn" class="quiet" type="button">刷新</button>
+            <button id="newProjectBtn" class="primary" type="button">新项目</button>
+          </div>
+        </header>
+        <div id="notice" class="notice hidden"></div>
+        <section id="content" class="content"></section>
+      </main>
+    </section>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
