@@ -1626,7 +1626,8 @@ def main() -> None:
         print("\n已停止")
 
 
-handler = TalentMapHandler
+class handler(TalentMapHandler):
+    pass
 
 
 if __name__ == "__main__":
