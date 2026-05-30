@@ -1627,7 +1627,9 @@ def main() -> None:
 
 
 class handler(TalentMapHandler):
-    pass
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        init_db()
+        super().__init__(*args, **kwargs)
 
 
 if __name__ == "__main__":
