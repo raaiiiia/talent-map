@@ -154,7 +154,7 @@ select:focus-visible {
 
 .login-art {
   position: relative;
-  padding: clamp(24px, 4.4vw, 54px) 0;
+  padding: clamp(16px, 2.6vw, 32px) 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -181,27 +181,36 @@ select:focus-visible {
 .ad-stage {
   position: relative;
   width: 100%;
-  min-height: min(640px, calc(100vh - 48px));
+  min-height: clamp(480px, calc(100vh - 120px), 560px);
   display: flex;
   align-items: stretch;
 }
 
 .ad-panel {
-  border: 1px solid rgba(32, 33, 36, 0.14);
-  border-radius: 8px;
-  box-shadow: 0 28px 80px rgba(33, 35, 38, 0.16);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .ad-panel-main {
   position: relative;
   width: 100%;
-  min-height: min(640px, calc(100vh - 48px));
-  padding: clamp(28px, 4vw, 54px);
+  min-height: clamp(480px, calc(100vh - 120px), 560px);
+  padding: clamp(24px, 3.4vw, 46px);
   overflow: hidden;
   color: #f8f4e9;
   border-left: 0;
   border-right: 0;
   border-radius: 0;
+  box-shadow: inset 0 0 0 1px rgba(248, 244, 233, 0.05);
+  mask-image:
+    linear-gradient(90deg, transparent 0, #000 6%, #000 94%, transparent 100%),
+    linear-gradient(180deg, transparent 0, #000 7%, #000 93%, transparent 100%);
+  mask-composite: intersect;
+  -webkit-mask-image:
+    linear-gradient(90deg, transparent 0, #000 6%, #000 94%, transparent 100%),
+    linear-gradient(180deg, transparent 0, #000 7%, #000 93%, transparent 100%);
+  -webkit-mask-composite: source-in;
   background:
     linear-gradient(90deg, rgba(248, 244, 233, 0.07) 1px, transparent 1px),
     linear-gradient(0deg, rgba(248, 244, 233, 0.07) 1px, transparent 1px),
@@ -248,7 +257,7 @@ select:focus-visible {
   grid-template-columns: minmax(0, 1fr) 118px;
   gap: 24px;
   align-items: start;
-  margin-top: 34px;
+  margin-top: clamp(22px, 3vh, 32px);
 }
 
 .ad-kicker {
@@ -259,10 +268,10 @@ select:focus-visible {
 }
 
 .ad-hero h2 {
-  max-width: 720px;
+  max-width: 680px;
   margin: 0;
   color: #fffaf0;
-  font-size: clamp(36px, 4.8vw, 58px);
+  font-size: clamp(32px, 3.8vw, 48px);
   line-height: 1.14;
   letter-spacing: 0;
 }
@@ -291,9 +300,10 @@ select:focus-visible {
 .radar-map {
   position: relative;
   z-index: 1;
-  width: min(520px, 58%);
+  width: min(420px, 48%, calc(100vh - 430px));
+  min-width: 300px;
   aspect-ratio: 1;
-  margin: clamp(22px, 3vw, 36px) auto 28px;
+  margin: clamp(14px, 2.3vh, 24px) auto clamp(14px, 2.3vh, 22px);
   border: 1px solid rgba(142, 208, 183, 0.45);
   border-radius: 50%;
   background:
@@ -376,7 +386,7 @@ select:focus-visible {
 
 .ad-metrics div {
   min-width: 0;
-  padding: 14px;
+  padding: 12px;
   border: 1px solid rgba(248, 244, 233, 0.16);
   border-radius: 8px;
   background: rgba(248, 244, 233, 0.06);
@@ -399,9 +409,9 @@ select:focus-visible {
 .ad-panel-side {
   position: absolute;
   right: clamp(24px, 4vw, 54px);
-  bottom: clamp(32px, 5vw, 72px);
-  width: min(330px, 30vw);
-  padding: 18px;
+  bottom: clamp(24px, 3.6vw, 44px);
+  width: min(310px, 28vw);
+  padding: 16px;
   border-color: rgba(248, 244, 233, 0.28);
   background: rgba(255, 252, 244, 0.9);
   backdrop-filter: blur(10px);
@@ -1379,16 +1389,16 @@ summary {
 
 @media (max-width: 1180px) {
   .login-art {
-    padding: 28px 0;
+    padding: clamp(14px, 2.2vw, 24px) 0;
   }
 
   .ad-stage {
-    min-height: 520px;
+    min-height: clamp(460px, calc(100vh - 92px), 520px);
   }
 
   .ad-panel-main {
-    min-height: 492px;
-    padding: 24px;
+    min-height: clamp(460px, calc(100vh - 92px), 520px);
+    padding: 22px;
   }
 
   .ad-hero {
@@ -1408,12 +1418,13 @@ summary {
   }
 
   .radar-map {
-    width: min(360px, 72%);
+    width: min(320px, 58%, calc(100vh - 390px));
+    min-width: 260px;
   }
 
   .ad-panel-side {
     right: 12px;
-    bottom: 30px;
+    bottom: 24px;
     width: min(300px, 52%);
   }
 

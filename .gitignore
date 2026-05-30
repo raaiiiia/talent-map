@@ -17,3 +17,5 @@ build/
 *.log
 
 .vercel
+.chrome-tmp/
+login-preview*.png
