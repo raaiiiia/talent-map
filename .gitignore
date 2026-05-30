@@ -20,3 +20,4 @@ build/
 .chrome-tmp/
 login-preview*.png
 online-styles-check.css
+*-styles-check.css
