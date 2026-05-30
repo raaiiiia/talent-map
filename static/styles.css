@@ -154,7 +154,7 @@ select:focus-visible {
 
 .login-art {
   position: relative;
-  padding: clamp(28px, 5vw, 72px);
+  padding: clamp(24px, 4.4vw, 54px) 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -169,9 +169,9 @@ select:focus-visible {
 .login-art::before {
   content: "";
   position: absolute;
-  inset: 9% 7% auto auto;
-  width: 430px;
-  height: 430px;
+  inset: 11% -6% auto auto;
+  width: 520px;
+  height: 520px;
   background: conic-gradient(from 30deg, rgba(220, 116, 78, 0.28), rgba(41, 112, 95, 0.18), rgba(47, 95, 143, 0.2), rgba(220, 116, 78, 0.28));
   clip-path: polygon(52% 0, 100% 34%, 82% 100%, 12% 88%, 0 26%);
   opacity: 0.42;
@@ -180,8 +180,10 @@ select:focus-visible {
 
 .ad-stage {
   position: relative;
-  width: min(900px, 100%);
-  min-height: 560px;
+  width: 100%;
+  min-height: min(640px, calc(100vh - 48px));
+  display: flex;
+  align-items: stretch;
 }
 
 .ad-panel {
@@ -192,15 +194,21 @@ select:focus-visible {
 
 .ad-panel-main {
   position: relative;
-  min-height: 520px;
-  padding: 30px;
+  width: 100%;
+  min-height: min(640px, calc(100vh - 48px));
+  padding: clamp(28px, 4vw, 54px);
   overflow: hidden;
   color: #f8f4e9;
+  border-left: 0;
+  border-right: 0;
+  border-radius: 0;
   background:
     linear-gradient(90deg, rgba(248, 244, 233, 0.07) 1px, transparent 1px),
     linear-gradient(0deg, rgba(248, 244, 233, 0.07) 1px, transparent 1px),
+    radial-gradient(circle at 4% 28%, rgba(255, 255, 255, 0.13), transparent 17%),
+    radial-gradient(circle at 82% 90%, rgba(41, 112, 95, 0.42), transparent 34%),
     linear-gradient(145deg, #17191d 0%, #222017 58%, #10372f 100%);
-  background-size: 32px 32px, 32px 32px, auto;
+  background-size: 32px 32px, 32px 32px, auto, auto, auto;
 }
 
 .ad-panel-main::after {
@@ -237,7 +245,7 @@ select:focus-visible {
 
 .ad-hero {
   display: grid;
-  grid-template-columns: 1fr 118px;
+  grid-template-columns: minmax(0, 1fr) 118px;
   gap: 24px;
   align-items: start;
   margin-top: 34px;
@@ -251,10 +259,10 @@ select:focus-visible {
 }
 
 .ad-hero h2 {
-  max-width: 580px;
+  max-width: 720px;
   margin: 0;
   color: #fffaf0;
-  font-size: 36px;
+  font-size: clamp(36px, 4.8vw, 58px);
   line-height: 1.14;
   letter-spacing: 0;
 }
@@ -283,9 +291,9 @@ select:focus-visible {
 .radar-map {
   position: relative;
   z-index: 1;
-  width: min(430px, 62%);
+  width: min(520px, 58%);
   aspect-ratio: 1;
-  margin: 28px auto 24px;
+  margin: clamp(22px, 3vw, 36px) auto 28px;
   border: 1px solid rgba(142, 208, 183, 0.45);
   border-radius: 50%;
   background:
@@ -363,7 +371,7 @@ select:focus-visible {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 12px;
-  padding-right: 332px;
+  width: min(760px, calc(100% - 360px));
 }
 
 .ad-metrics div {
@@ -390,11 +398,12 @@ select:focus-visible {
 
 .ad-panel-side {
   position: absolute;
-  right: -14px;
-  bottom: 44px;
-  width: 310px;
+  right: clamp(24px, 4vw, 54px);
+  bottom: clamp(32px, 5vw, 72px);
+  width: min(330px, 30vw);
   padding: 18px;
-  background: rgba(255, 252, 244, 0.95);
+  border-color: rgba(248, 244, 233, 0.28);
+  background: rgba(255, 252, 244, 0.9);
   backdrop-filter: blur(10px);
   animation: floatPanel 5s ease-in-out infinite;
 }
@@ -433,31 +442,65 @@ select:focus-visible {
 .ad-label {
   position: absolute;
   z-index: 2;
-  padding: 8px 12px;
-  border: 1px solid rgba(32, 33, 36, 0.16);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  border: 1px solid rgba(248, 244, 233, 0.22);
   border-radius: 999px;
-  color: #17191d;
-  background: #fff7df;
-  box-shadow: 0 12px 30px rgba(33, 35, 38, 0.12);
+  color: #fffaf0;
+  background: rgba(248, 244, 233, 0.08);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.16);
+  backdrop-filter: blur(12px);
   font-size: 12px;
   font-weight: 800;
 }
 
+.ad-label::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f1c36d;
+  box-shadow: 0 0 0 5px rgba(241, 195, 109, 0.12);
+}
+
+.ad-label::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 82px;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(241, 195, 109, 0.58), transparent);
+}
+
 .label-a {
-  top: 204px;
-  left: -18px;
+  top: 27%;
+  left: 7%;
 }
 
 .label-b {
-  top: 238px;
-  left: -22px;
-  background: #e5f4ed;
+  top: 34%;
+  left: 11%;
+  border-color: rgba(142, 208, 183, 0.36);
+  background: rgba(142, 208, 183, 0.12);
 }
 
 .label-c {
-  right: 250px;
-  bottom: 28px;
-  background: #f7e2db;
+  right: 32%;
+  bottom: 7%;
+  border-color: rgba(220, 116, 78, 0.38);
+  background: rgba(220, 116, 78, 0.13);
+}
+
+.label-a::after,
+.label-b::after {
+  left: 100%;
+}
+
+.label-c::after {
+  right: 100%;
+  background: linear-gradient(270deg, rgba(220, 116, 78, 0.62), transparent);
 }
 
 @keyframes scanLine {
@@ -1336,7 +1379,7 @@ summary {
 
 @media (max-width: 1180px) {
   .login-art {
-    padding: 28px;
+    padding: 28px 0;
   }
 
   .ad-stage {
@@ -1375,12 +1418,21 @@ summary {
   }
 
   .ad-metrics {
-    padding-right: 0;
+    width: min(420px, calc(100% - 300px));
     grid-template-columns: repeat(2, 1fr);
   }
 
+  .ad-label::after {
+    width: 52px;
+  }
+
   .label-a {
-    left: 10px;
+    top: 29%;
+    left: 12px;
+  }
+
+  .label-b {
+    left: 34px;
   }
 
   .label-c {
