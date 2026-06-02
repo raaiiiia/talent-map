@@ -1499,8 +1499,8 @@ function renderSettings() {
     <div class="section">
       <h3>更多</h3>
       <details>
-        <summary>辅助爬虫和产品形态建议</summary>
-        <p class="fine muted">这个需求需要 AI 辅助采集和结构化抽取，但第一版不建议做“登录爬虫插件”。更稳妥的形态是本地 Web 应用：用搜索 API 找公开网页，用 DeepSeek 抽取候选人，再由 HR 人工确认。浏览器插件适合以后做“手动打开页面后一键保存当前公开内容”，不适合绕过招聘网站或平台的访问限制。</p>
+        <summary>数据来源与使用说明</summary>
+        <p class="fine muted">平台仅处理公开可读网页、用户手动提交的链接，以及企业已授权的候选人资料。系统会把分散信息整理为候选人线索、证据摘要和匹配建议，正式使用前请结合原始来源进行人工确认。</p>
       </details>
     </div>
   `;
