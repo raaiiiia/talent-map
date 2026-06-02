@@ -377,13 +377,24 @@ function setBusy(isBusy) {
 }
 
 function showNotice(message, type = "info") {
-  const notice = byId("notice");
+  const appNotice = byId("notice");
+  const loginNotice = byId("loginNotice");
+  const loginVisible = !byId("loginScreen").classList.contains("hidden");
+  const notice = loginVisible && loginNotice ? loginNotice : appNotice;
+  const staleNotice = notice === appNotice ? loginNotice : appNotice;
   if (!message) {
-    notice.className = "notice hidden";
-    notice.textContent = "";
+    [appNotice, loginNotice].filter(Boolean).forEach((item) => {
+      item.className = item.id === "loginNotice" ? "notice login-notice hidden" : "notice hidden";
+      item.textContent = "";
+    });
     return;
   }
+  if (staleNotice) {
+    staleNotice.className = staleNotice.id === "loginNotice" ? "notice login-notice hidden" : "notice hidden";
+    staleNotice.textContent = "";
+  }
   notice.className = `notice ${type === "error" ? "error" : type === "success" ? "success" : ""}`;
+  if (notice.id === "loginNotice") notice.classList.add("login-notice");
   notice.textContent = message;
 }
 
@@ -401,6 +412,12 @@ async function api(path, options = {}) {
   const contentType = response.headers.get("content-type") || "";
   const data = contentType.includes("application/json") ? await response.json() : await response.text();
   if (!response.ok) {
+    if (response.status === 401 && path !== "/api/login") {
+      clearAuthState();
+      showLogin();
+      clearLoginFields();
+      throw new Error("登录已过期，请重新登录。");
+    }
     throw new Error((data && (data.error || data.message)) || `请求失败：${response.status}`);
   }
   return data;
@@ -471,6 +488,29 @@ function showApp() {
 function showLogin() {
   byId("loginScreen").classList.remove("hidden");
   byId("appShell").classList.add("hidden");
+  clearLoginFields();
+}
+
+function clearAuthState() {
+  state.token = "";
+  state.user = null;
+  localStorage.removeItem("talent_map_token");
+  localStorage.removeItem("talent_map_active_project");
+}
+
+function clearLoginFields() {
+  const email = byId("loginEmail");
+  const password = byId("loginPassword");
+  const clear = () => {
+    email.value = "";
+    password.value = "";
+    email.setAttribute("value", "");
+    password.setAttribute("value", "");
+  };
+  clear();
+  requestAnimationFrame(clear);
+  window.setTimeout(clear, 80);
+  window.setTimeout(clear, 350);
 }
 
 function renderShell() {
@@ -980,6 +1020,93 @@ function topEntries(map, limit = 12) {
     .slice(0, limit);
 }
 
+function average(values) {
+  const nums = values.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+  if (!nums.length) return 0;
+  return Math.round(nums.reduce((sum, value) => sum + value, 0) / nums.length);
+}
+
+function evidenceScore(candidate) {
+  let score = 0;
+  if (normalizeList(candidate.source_links).length) score += 30;
+  if (normalizeList(candidate.works).length) score += 25;
+  if (normalizeList(candidate.platforms).length) score += 15;
+  if ((candidate.raw_evidence || "").trim().length >= 18) score += 20;
+  if ((candidate.recommendation_reason || "").trim().length >= 12) score += 10;
+  return Math.min(score, 100);
+}
+
+function scoreDistributionEntries() {
+  const bands = {
+    "80+ 强匹配": 0,
+    "60-79 可约谈": 0,
+    "40-59 待核实": 0,
+    "低匹配/未评分": 0,
+  };
+  state.candidates.forEach((candidate) => {
+    const score = Number(candidate.score || 0);
+    if (score >= 80) bands["80+ 强匹配"] += 1;
+    else if (score >= 60) bands["60-79 可约谈"] += 1;
+    else if (score >= 40) bands["40-59 待核实"] += 1;
+    else bands["低匹配/未评分"] += 1;
+  });
+  return Object.entries(bands);
+}
+
+function pipelineEntries() {
+  const counts = {};
+  STATUS_OPTIONS.forEach((status) => {
+    counts[status] = 0;
+  });
+  state.candidates.forEach((candidate) => {
+    const status = candidate.status || STATUS_OPTIONS[0];
+    counts[status] = (counts[status] || 0) + 1;
+  });
+  return Object.entries(counts).filter(([, value]) => value > 0);
+}
+
+function evidenceDistributionEntries() {
+  const bands = {
+    "证据完整": 0,
+    "可初筛": 0,
+    "需补证": 0,
+    "缺少证据": 0,
+  };
+  state.candidates.forEach((candidate) => {
+    const score = evidenceScore(candidate);
+    if (score >= 70) bands["证据完整"] += 1;
+    else if (score >= 45) bands["可初筛"] += 1;
+    else if (score > 0) bands["需补证"] += 1;
+    else bands["缺少证据"] += 1;
+  });
+  return Object.entries(bands);
+}
+
+function companyQualityEntries(limit = 10) {
+  const companies = {};
+  state.candidates.forEach((candidate) => {
+    const company = candidate.current_company || "待确认";
+    if (!companies[company]) {
+      companies[company] = { count: 0, scores: [], evidence: [], high: 0 };
+    }
+    const score = Number(candidate.score || 0);
+    companies[company].count += 1;
+    companies[company].scores.push(score);
+    companies[company].evidence.push(evidenceScore(candidate));
+    if (score >= 80) companies[company].high += 1;
+  });
+  return Object.entries(companies)
+    .map(([company, value]) => ({
+      company,
+      count: value.count,
+      avgScore: average(value.scores),
+      avgEvidence: average(value.evidence),
+      high: value.high,
+    }))
+    .sort((a, b) => b.high - a.high || b.avgScore - a.avgScore || b.count - a.count)
+    .slice(0, limit);
+}
+
 function barSvg(id, title, entries, color = "#2f5f8f") {
   const safeEntries = entries.length ? entries : [["暂无数据", 1]];
   const height = 72 + safeEntries.length * 34;
@@ -999,6 +1126,142 @@ function barSvg(id, title, entries, color = "#2f5f8f") {
     <svg id="${id}" viewBox="0 0 680 ${height}" role="img" aria-label="${escapeHtml(title)}">
       <rect width="680" height="${height}" fill="#fbfbfa"></rect>
       <text x="24" y="34" fill="#202124" font-size="18" font-weight="700">${escapeHtml(title)}</text>
+      ${rows}
+    </svg>
+  `;
+}
+
+function pipelineSvg() {
+  const entries = pipelineEntries();
+  const safeEntries = entries.length ? entries : [["待筛选", state.candidates.length || 1]];
+  const max = Math.max(...safeEntries.map(([, value]) => value), 1);
+  const total = safeEntries.reduce((sum, [, value]) => sum + value, 0) || 1;
+  const rows = safeEntries
+    .map(([label, value], index) => {
+      const y = 74 + index * 42;
+      const width = Math.max(22, Math.round((value / max) * 430));
+      const pct = Math.round((value / total) * 100);
+      return `
+        <text x="24" y="${y + 15}" fill="#202124" font-size="13">${escapeHtml(truncate(label, 14))}</text>
+        <rect x="154" y="${y}" width="${width}" height="22" rx="5" fill="#2f5f8f" opacity="${0.9 - Math.min(index * 0.08, 0.4)}"></rect>
+        <text x="${170 + width}" y="${y + 16}" fill="#202124" font-size="12">${value} 人 · ${pct}%</text>
+      `;
+    })
+    .join("");
+  return `
+    <svg id="pipelineMap" viewBox="0 0 680 ${112 + safeEntries.length * 42}" role="img" aria-label="候选人筛选漏斗">
+      <rect width="680" height="${112 + safeEntries.length * 42}" fill="#fbfbfa"></rect>
+      <text x="24" y="34" fill="#202124" font-size="18" font-weight="700">候选人筛选漏斗</text>
+      <text x="24" y="55" fill="#6f7378" font-size="12">按人才状态观察当前项目的触达与推进结构</text>
+      ${rows}
+    </svg>
+  `;
+}
+
+function evidenceSvg() {
+  const entries = evidenceDistributionEntries();
+  const colors = ["#29705f", "#2f5f8f", "#9a6a25", "#8a8d91"];
+  const total = entries.reduce((sum, [, value]) => sum + value, 0) || 1;
+  let cursor = 70;
+  const segments = entries
+    .map(([label, value], index) => {
+      const width = Math.max(value ? 18 : 0, Math.round((value / total) * 520));
+      const x = cursor;
+      cursor += width;
+      return `
+        <rect x="${x}" y="92" width="${width}" height="30" rx="5" fill="${colors[index]}"></rect>
+        ${width > 54 ? `<text x="${x + 10}" y="112" fill="#fff" font-size="12">${value}</text>` : ""}
+        <circle cx="${92 + index * 148}" cy="160" r="6" fill="${colors[index]}"></circle>
+        <text x="${106 + index * 148}" y="164" fill="#202124" font-size="12">${escapeHtml(label)} ${value}</text>
+      `;
+    })
+    .join("");
+  return `
+    <svg id="evidenceMap" viewBox="0 0 680 210" role="img" aria-label="候选人证据完整度">
+      <rect width="680" height="210" fill="#fbfbfa"></rect>
+      <text x="24" y="34" fill="#202124" font-size="18" font-weight="700">证据完整度</text>
+      <text x="24" y="55" fill="#6f7378" font-size="12">来源链接、作品、平台、原始证据和推荐理由越完整，越适合进入面试前核验</text>
+      <rect x="70" y="92" width="520" height="30" rx="5" fill="#eceae5"></rect>
+      ${segments}
+    </svg>
+  `;
+}
+
+function priorityMatrixSvg() {
+  const candidates = [...state.candidates]
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || evidenceScore(b) - evidenceScore(a))
+    .slice(0, 42);
+  const colorForStatus = (status) => {
+    if (status === "已收藏") return "#29705f";
+    if (status === "已联系" || status === "待联系") return "#2f5f8f";
+    if (status === "已排除") return "#8a8d91";
+    return "#9a6a25";
+  };
+  const points = candidates
+    .map((candidate, index) => {
+      const score = Math.max(0, Math.min(100, Number(candidate.score || 0)));
+      const evidence = evidenceScore(candidate);
+      const x = 90 + score * 5.05;
+      const y = 336 - evidence * 2.36;
+      const r = 5 + Math.min(7, normalizeList(candidate.source_links).length + normalizeList(candidate.works).length);
+      const label = index < 12 ? `<text x="${x + 10}" y="${y + 4}" fill="#202124" font-size="11">${escapeHtml(truncate(candidate.name || "未命名", 8))}</text>` : "";
+      return `
+        <circle cx="${x}" cy="${y}" r="${r}" fill="${colorForStatus(candidate.status)}" opacity="0.82">
+          <title>${escapeHtml(candidate.name || "未命名")} · 匹配 ${score} · 证据 ${evidence}</title>
+        </circle>
+        ${label}
+      `;
+    })
+    .join("");
+  return `
+    <svg id="priorityMap" viewBox="0 0 680 420" role="img" aria-label="人才优先级矩阵">
+      <rect width="680" height="420" fill="#fbfbfa"></rect>
+      <text x="24" y="34" fill="#202124" font-size="18" font-weight="700">人才优先级矩阵</text>
+      <text x="24" y="55" fill="#6f7378" font-size="12">横轴为匹配评分，纵轴为证据完整度；右上角优先进入约谈或深度背调</text>
+      <rect x="90" y="100" width="505" height="236" fill="#f2f5f1"></rect>
+      <rect x="90" y="218" width="505" height="118" fill="#f7f3ea"></rect>
+      <line x1="393" y1="100" x2="393" y2="336" stroke="#d8d6ce" stroke-dasharray="5 5"></line>
+      <line x1="90" y1="218" x2="595" y2="218" stroke="#d8d6ce" stroke-dasharray="5 5"></line>
+      <line x1="90" y1="336" x2="595" y2="336" stroke="#202124" stroke-width="1.2"></line>
+      <line x1="90" y1="100" x2="90" y2="336" stroke="#202124" stroke-width="1.2"></line>
+      <text x="424" y="122" fill="#29705f" font-size="12" font-weight="700">优先触达</text>
+      <text x="116" y="122" fill="#6f7378" font-size="12">补齐画像</text>
+      <text x="424" y="314" fill="#9a6a25" font-size="12">先核实证据</text>
+      <text x="276" y="370" fill="#202124" font-size="12">匹配评分</text>
+      <text x="24" y="226" fill="#202124" font-size="12" transform="rotate(-90 24 226)">证据完整度</text>
+      <text x="86" y="354" fill="#6f7378" font-size="11">0</text>
+      <text x="584" y="354" fill="#6f7378" font-size="11">100</text>
+      <text x="62" y="104" fill="#6f7378" font-size="11">100</text>
+      ${points}
+    </svg>
+  `;
+}
+
+function companyQualitySvg() {
+  const entries = companyQualityEntries(10);
+  const safeEntries = entries.length ? entries : [{ company: "待确认", count: 1, avgScore: 0, avgEvidence: 0, high: 0 }];
+  const height = 78 + safeEntries.length * 40;
+  const rows = safeEntries
+    .map((entry, index) => {
+      const y = 62 + index * 40;
+      const scoreWidth = Math.max(8, Math.round(entry.avgScore * 2.4));
+      const evidenceWidth = Math.max(8, Math.round(entry.avgEvidence * 2.4));
+      return `
+        <text x="24" y="${y + 17}" fill="#202124" font-size="12">${escapeHtml(truncate(entry.company, 15))}</text>
+        <rect x="166" y="${y}" width="240" height="9" rx="4" fill="#eceae5"></rect>
+        <rect x="166" y="${y}" width="${scoreWidth}" height="9" rx="4" fill="#2f5f8f"></rect>
+        <rect x="166" y="${y + 16}" width="240" height="9" rx="4" fill="#eceae5"></rect>
+        <rect x="166" y="${y + 16}" width="${evidenceWidth}" height="9" rx="4" fill="#29705f"></rect>
+        <text x="430" y="${y + 9}" fill="#202124" font-size="11">均分 ${entry.avgScore}</text>
+        <text x="430" y="${y + 25}" fill="#202124" font-size="11">证据 ${entry.avgEvidence}</text>
+        <text x="532" y="${y + 17}" fill="#202124" font-size="12">${entry.count} 人 · 高匹配 ${entry.high}</text>
+      `;
+    })
+    .join("");
+  return `
+    <svg id="companyQualityMap" viewBox="0 0 680 ${height}" role="img" aria-label="目标公司人才供给质量">
+      <rect width="680" height="${height}" fill="#fbfbfa"></rect>
+      <text x="24" y="34" fill="#202124" font-size="18" font-weight="700">目标公司供给质量</text>
       ${rows}
     </svg>
   `;
@@ -1074,9 +1337,9 @@ function flowSvg() {
   `;
 }
 
-function renderMapCard(title, svg, id) {
+function renderMapCard(title, svg, id, extraClass = "") {
   return `
-    <div class="map-card">
+    <div class="map-card ${extraClass}">
       <h3>
         <span>${escapeHtml(title)}</span>
         <span class="svg-actions">
@@ -1105,6 +1368,7 @@ function renderMaps() {
   const skillEntries = topEntries(countsFor("skill_tags"), 12);
   const platformEntries = topEntries(countsFor("platforms"), 10);
   const cityEntries = topEntries(countScalar("city"), 8);
+  const scoreEntries = scoreDistributionEntries();
   byId("content").innerHTML = `
     <div class="page-head">
       <div>
@@ -1118,6 +1382,11 @@ function renderMaps() {
     </div>
     ${renderMetrics()}
     <div class="map-grid">
+      ${renderMapCard("优先级矩阵", priorityMatrixSvg(), "priorityMap", "map-wide")}
+      ${renderMapCard("筛选漏斗", pipelineSvg(), "pipelineMap")}
+      ${renderMapCard("证据完整度", evidenceSvg(), "evidenceMap")}
+      ${renderMapCard("匹配评分分布", barSvg("scoreMap", "匹配评分分布", scoreEntries, "#6f4f8f"), "scoreMap")}
+      ${renderMapCard("目标公司供给质量", companyQualitySvg(), "companyQualityMap", "map-wide")}
       ${renderMapCard("技能分布", barSvg("skillMap", "技能分布", skillEntries, "#2f5f8f"), "skillMap")}
       ${renderMapCard("平台分布", barSvg("platformMap", "平台分布", platformEntries, "#29705f"), "platformMap")}
       ${renderMapCard("城市分布", barSvg("cityMap", "城市分布", cityEntries, "#9a6a25"), "cityMap")}
@@ -1329,6 +1598,7 @@ function downloadPng(id) {
 async function handleSubmit(event) {
   if (event.target.id === "loginForm") {
     event.preventDefault();
+    showNotice("");
     setBusy(true);
     try {
       const result = await api("/api/login", {
@@ -1338,7 +1608,9 @@ async function handleSubmit(event) {
       state.token = result.token;
       state.user = result.user;
       localStorage.setItem("talent_map_token", state.token);
+      clearLoginFields();
       showApp();
+      showNotice("");
       await loadMeAndProjects();
       showNotice("已登录。可以从默认问答创建项目，或选择左侧已有项目。", "success");
     } catch (error) {
@@ -1624,6 +1896,9 @@ async function init() {
   document.addEventListener("submit", handleSubmit);
   document.addEventListener("click", handleClick);
   document.addEventListener("change", handleChange);
+  window.addEventListener("pageshow", () => {
+    if (!byId("loginScreen").classList.contains("hidden")) clearLoginFields();
+  });
   byId("refreshBtn").addEventListener("click", async () => {
     setBusy(true);
     try {
@@ -1645,10 +1920,8 @@ async function init() {
     setView("wizard");
   });
   byId("logoutBtn").addEventListener("click", () => {
-    state.token = "";
-    state.user = null;
-    localStorage.removeItem("talent_map_token");
-    localStorage.removeItem("talent_map_active_project");
+    clearAuthState();
+    clearLoginFields();
     showLogin();
     showNotice("");
   });
@@ -1662,8 +1935,8 @@ async function init() {
   try {
     await loadMeAndProjects();
   } catch (error) {
-    state.token = "";
-    localStorage.removeItem("talent_map_token");
+    clearAuthState();
+    clearLoginFields();
     showLogin();
     showNotice("登录已过期，请重新登录。", "error");
   } finally {

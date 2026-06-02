@@ -885,6 +885,10 @@ select:focus-visible {
   border-left-color: var(--accent-2);
 }
 
+.login-notice {
+  margin: 4px 0 0;
+}
+
 .content {
   padding: 18px 22px 32px;
   width: min(1540px, 100%);
@@ -1495,6 +1499,10 @@ summary {
   border-color: var(--line-strong);
   box-shadow: var(--shadow-tight);
   transform: translateY(-2px);
+}
+
+.map-card.map-wide {
+  grid-column: 1 / -1;
 }
 
 .map-card h3 {

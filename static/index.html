@@ -12,16 +12,17 @@
         <p class="eyebrow">Local Talent Intelligence</p>
         <h1>人才地图本地版</h1>
         <p class="login-copy">面向企业 HR 的视频创作人才地图工具。数据默认保存在本机，只处理公开可读或企业授权的数据。</p>
-        <form id="loginForm" class="form">
+        <form id="loginForm" class="form" autocomplete="off">
           <div class="field">
             <label for="loginEmail">邮箱</label>
-            <input id="loginEmail" autocomplete="username" />
+            <input id="loginEmail" autocomplete="off" autocapitalize="off" spellcheck="false" />
           </div>
           <div class="field">
             <label for="loginPassword">密码</label>
-            <input id="loginPassword" type="password" autocomplete="current-password" />
+            <input id="loginPassword" type="password" autocomplete="new-password" />
           </div>
           <button class="primary" type="submit">登录</button>
+          <div id="loginNotice" class="notice login-notice hidden" aria-live="polite"></div>
           <p class="fine muted">请输入管理员提供的账号登录。</p>
         </form>
       </div>
