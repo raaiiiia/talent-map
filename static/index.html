@@ -12,6 +12,10 @@
         <p class="eyebrow">Local Talent Intelligence</p>
         <h1>人才地图本地版</h1>
         <p class="login-copy">面向企业 HR 的视频创作人才地图工具。数据默认保存在本机，只处理公开可读或企业授权的数据。</p>
+        <div class="auth-tabs" role="tablist" aria-label="账号入口">
+          <button id="authLoginTab" class="auth-tab active" type="button" data-action="auth-mode" data-mode="login" data-keep-enabled="true">登录</button>
+          <button id="authRegisterTab" class="auth-tab" type="button" data-action="auth-mode" data-mode="register" data-keep-enabled="true">注册</button>
+        </div>
         <form id="loginForm" class="form" autocomplete="off">
           <div class="field">
             <label for="loginEmail">邮箱</label>
@@ -22,9 +26,46 @@
             <input id="loginPassword" type="password" autocomplete="new-password" />
           </div>
           <button class="primary" type="submit">登录</button>
-          <div id="loginNotice" class="notice login-notice hidden" aria-live="polite"></div>
           <p class="fine muted">请输入管理员提供的账号登录。</p>
         </form>
+        <form id="registerForm" class="form register-form hidden" autocomplete="off">
+          <div class="field">
+            <label for="registerName">姓名</label>
+            <input id="registerName" autocomplete="off" maxlength="80" />
+          </div>
+          <div class="field">
+            <label for="registerEmail">邮箱</label>
+            <div class="inline-actions">
+              <input id="registerEmail" autocomplete="off" autocapitalize="off" spellcheck="false" />
+              <button id="sendRegisterCodeBtn" class="secondary" type="button" data-action="send-register-code">获取验证码</button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="registerCode">邮箱验证码</label>
+            <input id="registerCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code" />
+          </div>
+          <div class="field">
+            <label for="registerPassword">密码</label>
+            <input id="registerPassword" type="password" autocomplete="new-password" minlength="8" />
+          </div>
+          <div class="field">
+            <label for="registerPasswordConfirm">确认密码</label>
+            <input id="registerPasswordConfirm" type="password" autocomplete="new-password" minlength="8" />
+          </div>
+          <div class="field">
+            <label for="registerChallengeAnswer">机器人检测</label>
+            <div class="captcha-row">
+              <span id="registerChallengeQuestion" class="captcha-question" aria-label="机器人检测字符">--</span>
+              <input id="registerChallengeAnswer" inputmode="text" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="输入图中字符" />
+              <button class="quiet icon-button" type="button" data-action="refresh-register-challenge" aria-label="刷新机器人检测题">↻</button>
+            </div>
+            <input id="registerChallengeId" type="hidden" />
+            <input id="registerWebsite" class="honeypot" tabindex="-1" autocomplete="off" />
+          </div>
+          <button class="primary" type="submit">创建账号</button>
+          <p class="fine muted">新账号完成邮箱验证后可体验 1 次免费检索。</p>
+        </form>
+        <div id="loginNotice" class="notice login-notice hidden" aria-live="polite"></div>
       </div>
       <div class="login-art">
         <div class="ad-stage" aria-hidden="true">

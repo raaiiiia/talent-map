@@ -131,6 +131,7 @@ select:focus-visible {
 }
 
 .login {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(300px, 420px) 1fr;
   min-height: 100vh;
@@ -143,12 +144,12 @@ select:focus-visible {
 
 .login-panel {
   background: transparent;
-  border-right: 0;
+  border-right: 1px solid rgba(38, 44, 50, 0.12);
   padding: 52px 42px;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  box-shadow: none;
+  box-shadow: 1px 0 0 rgba(255, 255, 255, 0.52);
 }
 
 .login-panel h1 {
@@ -162,6 +163,161 @@ select:focus-visible {
   margin: 0 0 28px;
   color: var(--muted);
   line-height: 1.7;
+}
+
+.auth-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin: 0 0 14px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.46);
+}
+
+.auth-tab {
+  min-height: 36px;
+  justify-content: center;
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.auth-tab.active {
+  background: var(--surface);
+  border-color: var(--line-strong);
+  color: var(--ink);
+  box-shadow: var(--shadow-tight);
+}
+
+.register-form {
+  margin-top: 0;
+}
+
+.inline-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.captcha-row {
+  display: grid;
+  grid-template-columns: 136px minmax(0, 1fr) 38px;
+  gap: 8px;
+  align-items: center;
+  padding: 7px;
+  border: 1px solid rgba(38, 44, 50, 0.12);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.42);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.58);
+}
+
+.captcha-question {
+  position: relative;
+  width: 136px;
+  height: 48px;
+  padding: 0;
+  border: 1px solid rgba(38, 44, 50, 0.16);
+  border-radius: 6px;
+  background:
+    repeating-linear-gradient(135deg, rgba(47, 95, 143, 0.12) 0 2px, transparent 2px 7px),
+    linear-gradient(110deg, #f2f0e8, #dce8e3 45%, #ece3d7);
+  color: var(--ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 3px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.42);
+}
+
+.captcha-question::before,
+.captcha-question::after {
+  content: "";
+  position: absolute;
+  inset: 7px -8px auto;
+  height: 2px;
+  background: rgba(133, 70, 57, 0.38);
+  transform: rotate(-8deg);
+}
+
+.captcha-question::after {
+  inset: auto -8px 9px;
+  background: rgba(47, 95, 143, 0.34);
+  transform: rotate(10deg);
+}
+
+.captcha-row input {
+  min-height: 42px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.captcha-row .icon-button {
+  width: 38px;
+  min-width: 38px;
+  height: 42px;
+  padding: 0;
+}
+
+.captcha-question > span:not(.captcha-noise) {
+  position: relative;
+  z-index: 1;
+  display: inline-block;
+  min-width: 18px;
+  transform: translateY(var(--lift)) rotate(var(--tilt)) skewX(-8deg);
+  text-shadow: 1px 1px 0 rgba(255, 255, 255, 0.5), -1px 0 0 rgba(47, 95, 143, 0.2);
+}
+
+.captcha-question img {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 136px;
+  height: 48px;
+  object-fit: cover;
+  pointer-events: none;
+  user-select: none;
+}
+
+.captcha-noise {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  color: rgba(38, 44, 50, 0.16);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 5px;
+  line-height: 16px;
+  transform: rotate(-5deg) scale(1.15);
+  white-space: normal;
+  word-break: break-all;
+  pointer-events: none;
+}
+
+.icon-button {
+  width: 38px;
+  min-width: 38px;
+  padding: 0;
+  justify-content: center;
+}
+
+.honeypot {
+  position: absolute !important;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .login-art {
@@ -1866,6 +2022,20 @@ details[open] > :not(summary) {
   .login-panel {
     border-right: 0;
     padding: 34px 20px;
+  }
+
+  .inline-actions,
+  .captcha-row {
+    grid-template-columns: 1fr;
+  }
+
+  .captcha-question,
+  .captcha-question img {
+    width: 100%;
+  }
+
+  .icon-button {
+    width: 100%;
   }
 
   .topbar {

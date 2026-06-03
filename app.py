@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import csv
+import base64
 import hashlib
 import hmac
 import io
 import json
 import os
+import random
 import re
+import smtplib
 import sqlite3
 import sys
 import tempfile
@@ -14,6 +17,7 @@ import time
 import uuid
 import zipfile
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -25,11 +29,31 @@ from xml.etree import ElementTree as ET
 
 
 BASE_DIR = Path(__file__).resolve().parent
+
+
+def load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        value = value.strip().strip('"').strip("'")
+        os.environ[key] = value
+
+
+load_env_file(BASE_DIR / ".env")
+
 STATIC_DIR = BASE_DIR / "static"
 DATA_DIR = Path(tempfile.gettempdir()) / "talent_map_data" if os.getenv("VERCEL") else BASE_DIR / "data"
 DB_PATH = DATA_DIR / "talent_map.sqlite3"
 FALLBACK_DB_PATH = DATA_DIR / "talent_map.app.sqlite3"
 LOCAL_TZ = timezone(timedelta(hours=8))
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 DEFAULT_PROFILE = {
     "main_direction": "视频创作",
@@ -185,6 +209,142 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(pbkdf2_hash(password, salt).split("$", 1)[1], digest)
 
 
+def ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+
+def user_to_api(user: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    data = dict(user)
+    return {
+        "id": data["id"],
+        "name": data["name"],
+        "role": data["role"],
+        "free_searches_remaining": int(data.get("free_searches_remaining") or 0),
+    }
+
+
+def is_metered_user(user: sqlite3.Row | dict[str, Any]) -> bool:
+    return dict(user).get("role") == "registered"
+
+
+def has_search_quota(user: sqlite3.Row | dict[str, Any]) -> bool:
+    if not is_metered_user(user):
+        return True
+    return int(dict(user).get("free_searches_remaining") or 0) > 0
+
+
+def consume_free_search(user_id: int) -> bool:
+    with db() as conn:
+        row = conn.execute("SELECT role, free_searches_remaining FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not row:
+            return False
+        if row["role"] != "registered":
+            return True
+        if int(row["free_searches_remaining"] or 0) <= 0:
+            return False
+        conn.execute(
+            "UPDATE users SET free_searches_remaining = free_searches_remaining - 1 WHERE id = ? AND free_searches_remaining > 0",
+            (user_id,),
+        )
+        return True
+
+
+def code_hash(email: str, code: str) -> str:
+    return hashlib.sha256(f"{email.lower()}:{code}".encode("utf-8")).hexdigest()
+
+
+def challenge_hash(challenge_id: str, answer: str) -> str:
+    return hashlib.sha256(f"{challenge_id}:{answer.strip().upper()}".encode("utf-8")).hexdigest()
+
+
+def create_bot_challenge() -> dict[str, str]:
+    width = 136
+    height = 48
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
+    answer = "".join(random.choice(alphabet) for _ in range(4))
+    dots = []
+    for _ in range(28):
+        cx, cy = random.randint(0, width), random.randint(0, height)
+        radius = random.choice(["0.9", "1.2", "1.6", "2"])
+        color = random.choice(["#2f8f47", "#d65f8f", "#6843a3", "#1f5d9c", "#d28a2a"])
+        dots.append(f'<circle cx="{cx}" cy="{cy}" r="{radius}" fill="{color}" fill-opacity="0.55"/>')
+    letters = []
+    for idx, char in enumerate(answer):
+        x = 10 + idx * 31 + random.randint(-2, 2)
+        y = 38 + random.randint(-3, 3)
+        rotation = random.randint(-13, 13)
+        skew = random.randint(-10, 10)
+        scale_x = random.choice(["0.92", "0.98", "1.04", "1.10"])
+        letters.append(
+            f'<g transform="translate({x} {y}) rotate({rotation}) skewX({skew}) scale({scale_x} 1)">'
+            f'<text x="0" y="0" font-family="Trebuchet MS,Arial,sans-serif" font-size="43" '
+            f'font-weight="500" fill="#4da33f" fill-opacity="0.92" filter="url(#softBlur)">{escape(char)}</text>'
+            "</g>"
+        )
+    line_y1 = random.randint(23, 33)
+    line_y2 = random.randint(5, 15)
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
+        "<defs>"
+        '<filter id="softBlur"><feGaussianBlur stdDeviation="0.35"/></filter>'
+        "</defs>"
+        f'<rect width="{width}" height="{height}" rx="3" fill="#f8fbf5"/>'
+        f'<path d="M-8 {line_y1} L{width + 10} {line_y2}" stroke="#bf8756" stroke-opacity="0.72" stroke-width="1.7"/>'
+        f'{"".join(dots)}'
+        f'{"".join(letters)}'
+        "</svg>"
+    )
+    image = "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    challenge_id = uuid.uuid4().hex
+    expires_at = (datetime.now(LOCAL_TZ) + timedelta(minutes=10)).isoformat(timespec="seconds")
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO bot_challenges (id, question, answer_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+            (challenge_id, answer, challenge_hash(challenge_id, answer), expires_at, now_iso()),
+        )
+    return {"id": challenge_id, "image": image, "length": 4}
+
+
+def verify_bot_challenge(payload: dict[str, Any]) -> None:
+    if str(payload.get("website") or "").strip():
+        raise RuntimeError("机器人检测未通过，请重新提交。")
+    challenge_id = str(payload.get("challenge_id") or "").strip()
+    answer = str(payload.get("challenge_answer") or "").strip()
+    if not challenge_id or not answer:
+        raise RuntimeError("请先完成机器人检测。")
+    with db() as conn:
+        row = conn.execute("SELECT * FROM bot_challenges WHERE id = ?", (challenge_id,)).fetchone()
+        if not row or row["used_at"]:
+            raise RuntimeError("机器人检测已失效，请刷新后重试。")
+        if row["expires_at"] < now_iso():
+            raise RuntimeError("机器人检测已过期，请刷新后重试。")
+        if not hmac.compare_digest(row["answer_hash"], challenge_hash(challenge_id, answer)):
+            raise RuntimeError("机器人检测答案不正确。")
+        conn.execute("UPDATE bot_challenges SET used_at = ? WHERE id = ?", (now_iso(), challenge_id))
+
+
+def send_verification_email(email: str, code: str) -> None:
+    smtp_user = os.getenv("SMTP_USER", "raaaaiiia1@gmail.com").strip()
+    smtp_password = os.getenv("SMTP_PASSWORD", "").strip()
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
+    smtp_port = safe_int(os.getenv("SMTP_PORT"), 587)
+    smtp_from = os.getenv("SMTP_FROM", smtp_user).strip() or smtp_user
+    if not smtp_password:
+        raise RuntimeError("邮件服务尚未配置 SMTP_PASSWORD，请使用 Gmail 应用专用密码。")
+    message = EmailMessage()
+    message["From"] = smtp_from
+    message["To"] = email
+    message["Subject"] = "人才地图注册验证码"
+    message.set_content(f"你的注册验证码是：{code}\n\n验证码 10 分钟内有效。若非本人操作，请忽略这封邮件。")
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as smtp:
+        if os.getenv("SMTP_USE_TLS", "1") != "0":
+            smtp.starttls()
+        smtp.login(smtp_user, smtp_password)
+        smtp.send_message(message)
+
+
 def init_db() -> None:
     with db() as conn:
         schema_sql = """
@@ -194,7 +354,9 @@ def init_db() -> None:
                 name TEXT NOT NULL,
                 role TEXT NOT NULL DEFAULT '普通用户',
                 password_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                email_verified INTEGER NOT NULL DEFAULT 1,
+                free_searches_remaining INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS sessions (
@@ -267,11 +429,34 @@ def init_db() -> None:
                 payload_json TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS email_verifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL,
+                code_hash TEXT NOT NULL,
+                ip_address TEXT DEFAULT '',
+                expires_at TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                sent_at TEXT NOT NULL,
+                verified_at TEXT DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS bot_challenges (
+                id TEXT PRIMARY KEY,
+                question TEXT NOT NULL,
+                answer_hash TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                used_at TEXT DEFAULT '',
+                created_at TEXT NOT NULL
+            );
             """
         for statement in schema_sql.split(";"):
             statement = statement.strip()
             if statement:
                 conn.execute(statement)
+        ensure_column(conn, "users", "email_verified", "email_verified INTEGER NOT NULL DEFAULT 1")
+        ensure_column(conn, "users", "free_searches_remaining", "free_searches_remaining INTEGER NOT NULL DEFAULT 0")
         existing = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
         if existing == 0:
             admin_email = os.getenv("TALENT_MAP_ADMIN_EMAIL", "admin@local").strip().lower()
@@ -281,10 +466,10 @@ def init_db() -> None:
                 admin_password = uuid.uuid4().hex if os.getenv("VERCEL") else "admin123"
             conn.execute(
                 """
-                INSERT INTO users (email, name, role, password_hash, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO users (email, name, role, password_hash, created_at, email_verified, free_searches_remaining)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (admin_email, admin_name, "管理员", pbkdf2_hash(admin_password), now_iso()),
+                (admin_email, admin_name, "管理员", pbkdf2_hash(admin_password), now_iso(), 1, 0),
             )
         defaults = {
             "deepseek_model": "deepseek-chat",
@@ -1211,11 +1396,14 @@ class TalentMapHandler(BaseHTTPRequestHandler):
                 }
             )
             return
+        if path == "/api/register-challenge":
+            self.send_json({"challenge": create_bot_challenge()})
+            return
         user = self.require_user()
         if not user:
             return
         if path == "/api/me":
-            self.send_json({"user": {"id": user["id"], "name": user["name"], "role": user["role"]}})
+            self.send_json({"user": user_to_api(user)})
             return
         if path == "/api/config":
             config = get_config()
@@ -1317,7 +1505,13 @@ class TalentMapHandler(BaseHTTPRequestHandler):
                     "INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
                     (token, user["id"], expires_at, now_iso()),
                 )
-            self.send_json({"token": token, "user": {"id": user["id"], "name": user["name"], "role": user["role"]}})
+            self.send_json({"token": token, "user": user_to_api(user)})
+            return
+        if path == "/api/register/send-code":
+            self.api_register_send_code()
+            return
+        if path == "/api/register/complete":
+            self.api_register_complete()
             return
         user = self.require_user()
         if not user:
@@ -1437,11 +1631,120 @@ class TalentMapHandler(BaseHTTPRequestHandler):
             return
         self.send_json({"error": "Not found"}, 404)
 
+    def api_register_send_code(self) -> None:
+        payload = self.read_json()
+        email = str(payload.get("email") or "").strip().lower()
+        if not EMAIL_RE.fullmatch(email):
+            self.send_json({"error": "请输入有效邮箱地址。"}, 400)
+            return
+        try:
+            verify_bot_challenge(payload)
+        except RuntimeError as exc:
+            self.send_json({"error": str(exc)}, 400)
+            return
+        ip_address = self.client_address[0] if self.client_address else ""
+        sent_cutoff = (datetime.now(LOCAL_TZ) - timedelta(seconds=60)).isoformat(timespec="seconds")
+        hour_cutoff = (datetime.now(LOCAL_TZ) - timedelta(hours=1)).isoformat(timespec="seconds")
+        code = f"{random.randint(0, 999999):06d}"
+        with db() as conn:
+            if conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone():
+                self.send_json({"error": "该邮箱已注册，请直接登录。"}, 400)
+                return
+            recent = conn.execute(
+                "SELECT COUNT(*) AS c FROM email_verifications WHERE email = ? AND sent_at > ?",
+                (email, sent_cutoff),
+            ).fetchone()["c"]
+            hourly = conn.execute(
+                "SELECT COUNT(*) AS c FROM email_verifications WHERE (email = ? OR ip_address = ?) AND sent_at > ?",
+                (email, ip_address, hour_cutoff),
+            ).fetchone()["c"]
+            if recent:
+                self.send_json({"error": "验证码发送太频繁，请稍后再试。"}, 429)
+                return
+            if hourly >= 8:
+                self.send_json({"error": "验证码请求次数过多，请一小时后再试。"}, 429)
+                return
+            expires_at = (datetime.now(LOCAL_TZ) + timedelta(minutes=10)).isoformat(timespec="seconds")
+            conn.execute(
+                """
+                INSERT INTO email_verifications (email, code_hash, ip_address, expires_at, sent_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (email, code_hash(email, code), ip_address, expires_at, now_iso(), now_iso()),
+            )
+        try:
+            send_verification_email(email, code)
+        except RuntimeError as exc:
+            self.send_json({"error": str(exc)}, 500)
+            return
+        except (smtplib.SMTPException, OSError) as exc:
+            self.send_json({"error": f"验证码邮件发送失败：{exc}"}, 502)
+            return
+        self.send_json({"ok": True, "message": "验证码已发送，请在 10 分钟内完成注册。"})
+
+    def api_register_complete(self) -> None:
+        payload = self.read_json()
+        email = str(payload.get("email") or "").strip().lower()
+        name = str(payload.get("name") or "").strip() or email.split("@", 1)[0]
+        password = str(payload.get("password") or "")
+        code = str(payload.get("code") or "").strip()
+        if not EMAIL_RE.fullmatch(email):
+            self.send_json({"error": "请输入有效邮箱地址。"}, 400)
+            return
+        if len(password) < 8:
+            self.send_json({"error": "密码至少需要 8 位。"}, 400)
+            return
+        if not re.fullmatch(r"\d{6}", code):
+            self.send_json({"error": "请输入 6 位邮箱验证码。"}, 400)
+            return
+        with db() as conn:
+            if conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone():
+                self.send_json({"error": "该邮箱已注册，请直接登录。"}, 400)
+                return
+            verification = conn.execute(
+                """
+                SELECT * FROM email_verifications
+                WHERE email = ? AND verified_at = ''
+                ORDER BY id DESC LIMIT 1
+                """,
+                (email,),
+            ).fetchone()
+            if not verification or verification["expires_at"] < now_iso():
+                self.send_json({"error": "验证码不存在或已过期，请重新获取。"}, 400)
+                return
+            if verification["attempts"] >= 5:
+                self.send_json({"error": "验证码尝试次数过多，请重新获取。"}, 400)
+                return
+            if not hmac.compare_digest(verification["code_hash"], code_hash(email, code)):
+                conn.execute("UPDATE email_verifications SET attempts = attempts + 1 WHERE id = ?", (verification["id"],))
+                self.send_json({"error": "验证码不正确。"}, 400)
+                return
+            now = now_iso()
+            conn.execute("UPDATE email_verifications SET verified_at = ? WHERE id = ?", (now, verification["id"]))
+            cursor = conn.execute(
+                """
+                INSERT INTO users (email, name, role, password_hash, created_at, email_verified, free_searches_remaining)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (email, name, "registered", pbkdf2_hash(password), now, 1, 1),
+            )
+            token = uuid.uuid4().hex + uuid.uuid4().hex
+            expires_at = (datetime.now(LOCAL_TZ) + timedelta(days=14)).isoformat(timespec="seconds")
+            conn.execute(
+                "INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+                (token, cursor.lastrowid, expires_at, now),
+            )
+            user = conn.execute("SELECT * FROM users WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        self.send_json({"token": token, "user": user_to_api(user)}, 201)
+
     def api_discover(self, project_id: int, user: dict[str, Any]) -> None:
         with db() as conn:
             row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
         if not row:
             self.send_json({"error": "项目不存在"}, 404)
+            return
+        if not has_search_quota(user):
+            self.send_json({"error": "免费检索体验已使用完，请联系管理员开通更多次数。"}, 403)
             return
         project = project_to_api(row)
         profile = project["profile"]
@@ -1487,6 +1790,9 @@ class TalentMapHandler(BaseHTTPRequestHandler):
                     break
         if sources:
             save_sources(project_id, sources)
+        if is_metered_user(user) and not consume_free_search(user["id"]):
+            self.send_json({"error": "免费检索体验已使用完，请联系管理员开通更多次数。"}, 403)
+            return
         if not (config.get("deepseek_api_key") or os.getenv("DEEPSEEK_API_KEY")):
             self.send_json(
                 {

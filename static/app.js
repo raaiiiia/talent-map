@@ -320,6 +320,10 @@ const state = {
   wizardAnswers: [],
   busy: false,
   thinking: false,
+  authMode: "login",
+  registerChallenge: null,
+  registerCodeCooldownUntil: 0,
+  registerCodeCooldownTimer: null,
 };
 
 const SKIPPED_ANSWER = "跳过，按默认设置。";
@@ -374,6 +378,49 @@ function setBusy(isBusy) {
   document.querySelectorAll("button").forEach((button) => {
     if (button.dataset.keepEnabled !== "true") button.disabled = isBusy;
   });
+  updateRegisterCodeButton();
+}
+
+function updateRegisterCodeButton() {
+  const button = byId("sendRegisterCodeBtn");
+  if (!button) return;
+  const secondsLeft = Math.max(0, Math.ceil((state.registerCodeCooldownUntil - Date.now()) / 1000));
+  if (secondsLeft > 0) {
+    button.disabled = true;
+    button.textContent = `${secondsLeft}s 后重发`;
+    return;
+  }
+  button.disabled = state.busy;
+  button.textContent = "获取验证码";
+  if (state.registerCodeCooldownTimer) {
+    clearInterval(state.registerCodeCooldownTimer);
+    state.registerCodeCooldownTimer = null;
+  }
+}
+
+function startRegisterCodeCooldown(seconds = 60) {
+  state.registerCodeCooldownUntil = Date.now() + seconds * 1000;
+  if (state.registerCodeCooldownTimer) clearInterval(state.registerCodeCooldownTimer);
+  state.registerCodeCooldownTimer = setInterval(updateRegisterCodeButton, 250);
+  updateRegisterCodeButton();
+}
+
+function renderCaptchaChallenge(challenge) {
+  if (!challenge) return "--";
+  if (challenge.image) {
+    return `<img src="${escapeHtml(challenge.image)}" alt="四位验证码" draggable="false" />`;
+  }
+  const noise = escapeHtml(challenge.noise || "");
+  const chars = String(challenge.question || "")
+    .split("")
+    .slice(0, 4)
+    .map((char, index) => {
+      const tilt = [-12, 8, -7, 13][index] || 0;
+      const lift = [-1, 2, -2, 1][index] || 0;
+      return `<span style="--tilt:${tilt}deg;--lift:${lift}px">${escapeHtml(char)}</span>`;
+    })
+    .join("");
+  return `<span class="captcha-noise" aria-hidden="true">${noise}</span>${chars}`;
 }
 
 function showNotice(message, type = "info") {
@@ -421,6 +468,35 @@ async function api(path, options = {}) {
     throw new Error((data && (data.error || data.message)) || `请求失败：${response.status}`);
   }
   return data;
+}
+
+function clearRegisterFields() {
+  ["registerName", "registerEmail", "registerCode", "registerPassword", "registerPasswordConfirm", "registerChallengeAnswer", "registerWebsite"].forEach((id) => {
+    const input = byId(id);
+    if (input) input.value = "";
+  });
+}
+
+async function loadRegisterChallenge() {
+  const data = await api("/api/register-challenge");
+  state.registerChallenge = data.challenge || null;
+  const challengeId = byId("registerChallengeId");
+  const question = byId("registerChallengeQuestion");
+  const answer = byId("registerChallengeAnswer");
+  if (challengeId) challengeId.value = state.registerChallenge ? state.registerChallenge.id : "";
+  if (question) question.innerHTML = renderCaptchaChallenge(state.registerChallenge);
+  if (answer) answer.value = "";
+}
+
+async function setAuthMode(mode) {
+  state.authMode = mode === "register" ? "register" : "login";
+  const isRegister = state.authMode === "register";
+  byId("loginForm")?.classList.toggle("hidden", isRegister);
+  byId("registerForm")?.classList.toggle("hidden", !isRegister);
+  byId("authLoginTab")?.classList.toggle("active", !isRegister);
+  byId("authRegisterTab")?.classList.toggle("active", isRegister);
+  showNotice("");
+  if (isRegister && !state.registerChallenge) await loadRegisterChallenge();
 }
 
 async function downloadFile(path, filename) {
@@ -488,6 +564,7 @@ function showApp() {
 function showLogin() {
   byId("loginScreen").classList.remove("hidden");
   byId("appShell").classList.add("hidden");
+  setAuthMode("login");
   clearLoginFields();
 }
 
@@ -514,7 +591,12 @@ function clearLoginFields() {
 }
 
 function renderShell() {
-  byId("userBadge").textContent = state.user ? "已登录" : "未登录";
+  if (state.user) {
+    const remaining = Number(state.user.free_searches_remaining || 0);
+    byId("userBadge").textContent = state.user.role === "registered" ? `已登录 · 免费检索 ${remaining}` : "已登录";
+  } else {
+    byId("userBadge").textContent = "未登录";
+  }
   byId("projectList").innerHTML =
     state.projects
       .map(
@@ -1518,6 +1600,11 @@ async function discoverCandidates() {
     if (result.message) showNotice(result.message, result.ok ? "success" : "error");
     if (result.candidates && result.candidates.length) showNotice(`已生成候选人 ${result.candidates.length} 条，建议先逐条确认。`, "success");
     await loadProject(state.project.id);
+    try {
+      state.user = (await api("/api/me")).user;
+    } catch (_) {
+      // Keep the existing badge if the refresh is interrupted.
+    }
     renderShell();
     render();
   } catch (error) {
@@ -1620,6 +1707,42 @@ async function handleSubmit(event) {
     }
   }
 
+  if (event.target.id === "registerForm") {
+    event.preventDefault();
+    showNotice("");
+    const password = byId("registerPassword").value;
+    const confirm = byId("registerPasswordConfirm").value;
+    if (password !== confirm) {
+      showNotice("两次输入的密码不一致。", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await api("/api/register/complete", {
+        method: "POST",
+        body: {
+          name: byId("registerName").value,
+          email: byId("registerEmail").value,
+          password,
+          code: byId("registerCode").value,
+        },
+      });
+      state.token = result.token;
+      state.user = result.user;
+      localStorage.setItem("talent_map_token", state.token);
+      clearRegisterFields();
+      clearLoginFields();
+      showApp();
+      showNotice("");
+      await loadMeAndProjects();
+      showNotice("注册成功，已获得 1 次免费检索体验。", "success");
+    } catch (error) {
+      showNotice(error.message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
     if (event.target.id === "wizardForm") {
       event.preventDefault();
       const q = currentQuestion();
@@ -1714,6 +1837,60 @@ async function handleClick(event) {
   const actionEl = event.target.closest("[data-action]");
   if (!actionEl) return;
   const action = actionEl.dataset.action;
+
+  if (action === "auth-mode") {
+    await setAuthMode(actionEl.dataset.mode);
+    return;
+  }
+  if (action === "refresh-register-challenge") {
+    setBusy(true);
+    try {
+      await loadRegisterChallenge();
+    } catch (error) {
+      showNotice(error.message, "error");
+    } finally {
+      setBusy(false);
+    }
+    return;
+  }
+  if (action === "send-register-code") {
+    const email = byId("registerEmail").value.trim();
+    const challengeId = byId("registerChallengeId").value;
+    const challengeAnswer = byId("registerChallengeAnswer").value.trim();
+    if (!email) {
+      showNotice("请先输入邮箱。", "error");
+      return;
+    }
+    if (!challengeId || !challengeAnswer) {
+      showNotice("请先完成机器人检测。", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await api("/api/register/send-code", {
+        method: "POST",
+        body: {
+          email,
+          challenge_id: challengeId,
+          challenge_answer: challengeAnswer.toUpperCase(),
+          website: byId("registerWebsite").value,
+        },
+      });
+      showNotice(result.message || "验证码已发送，请查看邮箱。", "success");
+      startRegisterCodeCooldown(60);
+      await loadRegisterChallenge();
+    } catch (error) {
+      showNotice(error.message, "error");
+      try {
+        await loadRegisterChallenge();
+      } catch (_) {
+        // Leave the current challenge visible if refreshing fails.
+      }
+    } finally {
+      setBusy(false);
+    }
+    return;
+  }
 
   if (action === "select-project") {
     setBusy(true);
@@ -1892,10 +2069,17 @@ async function handleChange(event) {
   }
 }
 
+function handleInput(event) {
+  if (event.target.id === "registerChallengeAnswer") {
+    event.target.value = event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+  }
+}
+
 async function init() {
   document.addEventListener("submit", handleSubmit);
   document.addEventListener("click", handleClick);
   document.addEventListener("change", handleChange);
+  document.addEventListener("input", handleInput);
   window.addEventListener("pageshow", () => {
     if (!byId("loginScreen").classList.contains("hidden")) clearLoginFields();
   });
