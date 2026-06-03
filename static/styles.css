@@ -597,8 +597,9 @@ select:focus-visible {
   grid-template-columns: repeat(3, 1fr);
   gap: 0;
   width: min(600px, 56%);
-  border-top: 1px solid rgba(226, 190, 116, 0.26);
-  border-bottom: 1px solid rgba(55, 133, 116, 0.16);
+  border: 1px solid rgba(51, 72, 86, 0.14);
+  border-top-color: rgba(226, 190, 116, 0.28);
+  border-bottom-color: rgba(55, 133, 116, 0.18);
   background: linear-gradient(90deg, rgba(255, 253, 239, 0.72), rgba(238, 246, 239, 0.58) 78%, rgba(238, 246, 239, 0.18));
   backdrop-filter: none;
 }
@@ -610,6 +611,10 @@ select:focus-visible {
   border-right: 1px solid rgba(51, 72, 86, 0.12);
   border-radius: 0;
   background: transparent;
+}
+
+.ad-metrics div:last-child {
+  border-right: 0;
 }
 
 .ad-metrics div + div {
