@@ -347,7 +347,7 @@ const EXAMPLE_LIBRARY = {
 };
 
 const DEFAULT_PROFILE = {
-  main_direction: "视频创作",
+  main_direction: "图表创作",
   assistant_direction: "AI算法",
   region: "长三角，杭州优先",
   industries: ["互联网", "电商", "短视频"],
@@ -803,7 +803,7 @@ function inferProjectTitle(profile = {}, answers = answersByKey()) {
   if (/剪辑|调色|后期|包装/.test(text)) return "视频剪辑师";
   if (/直播|主播|场控/.test(text)) return "直播运营";
   if (/内容|选题|脚本|文案|策划/.test(text)) return "内容策划";
-  return "视频创作人才";
+  return "图表创作人才";
 }
 
 async function createProjectFromWizard(answerFromForm = "") {
@@ -1986,7 +1986,7 @@ async function handleClick(event) {
         body: {
           email,
           challenge_id: challengeId,
-          challenge_answer: challengeAnswer.toUpperCase(),
+          challenge_answer: challengeAnswer,
           website: byId("registerWebsite").value,
         },
       });
@@ -2208,7 +2208,7 @@ async function handleChange(event) {
 
 function handleInput(event) {
   if (event.target.id === "registerChallengeAnswer") {
-    event.target.value = event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+    event.target.value = event.target.value.replace(/[^A-Za-z0-9]/g, "").slice(0, 4);
   }
 }
 

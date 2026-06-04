@@ -59,7 +59,7 @@ KV_USER_ID_OFFSET = 1_000_000
 SESSION_TTL_SECONDS = 14 * 24 * 60 * 60
 
 DEFAULT_PROFILE = {
-    "main_direction": "视频创作",
+    "main_direction": "图表创作",
     "assistant_direction": "AI算法",
     "region": "长三角，杭州优先",
     "industries": ["互联网", "电商", "短视频"],
@@ -212,9 +212,27 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(pbkdf2_hash(password, salt).split("$", 1)[1], digest)
 
 
+def first_env(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value and value.strip():
+            return value.strip()
+    return None
+
+
 def kv_credentials() -> tuple[str | None, str | None]:
-    url = os.getenv("KV_REST_API_URL") or os.getenv("UPSTASH_REDIS_REST_URL")
-    token = os.getenv("KV_REST_API_TOKEN") or os.getenv("UPSTASH_REDIS_REST_TOKEN")
+    url = first_env(
+        "KV_REST_API_URL",
+        "UPSTASH_REDIS_REST_URL",
+        "REDIS_REST_API_URL",
+        "REDIS_REST_URL",
+    )
+    token = first_env(
+        "KV_REST_API_TOKEN",
+        "UPSTASH_REDIS_REST_TOKEN",
+        "REDIS_REST_API_TOKEN",
+        "REDIS_REST_TOKEN",
+    )
     return (url.rstrip("/") if url else None, token.strip() if token else None)
 
 
@@ -436,7 +454,7 @@ def code_hash(email: str, code: str) -> str:
 
 
 def challenge_hash(challenge_id: str, answer: str) -> str:
-    return hashlib.sha256(f"{challenge_id}:{answer.strip().upper()}".encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"{challenge_id}:{answer.strip()}".encode("utf-8")).hexdigest()
 
 
 def create_bot_challenge() -> dict[str, str]:
@@ -744,7 +762,7 @@ def infer_project_title(profile: dict[str, Any], answers: list[dict[str, Any]] |
         return "直播运营"
     if re.search(r"(内容|选题|脚本|文案|策划)", text):
         return "内容策划"
-    return "视频创作人才"
+    return "图表创作人才"
 
 
 def candidate_to_api(row: sqlite3.Row) -> dict[str, Any]:
@@ -1843,7 +1861,7 @@ class TalentMapHandler(BaseHTTPRequestHandler):
         hour_cutoff = (datetime.now(LOCAL_TZ) - timedelta(hours=1)).isoformat(timespec="seconds")
         code = f"{random.randint(0, 999999):06d}"
         if os.getenv("VERCEL") and not kv_enabled():
-            self.send_json({"error": "线上注册需要先配置 KV_REST_API_URL 和 KV_REST_API_TOKEN，否则账号无法持久保存。"}, 503)
+            self.send_json({"error": "线上注册需要配置 Redis REST 环境变量（KV_REST_API_URL/KV_REST_API_TOKEN 或 UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN），并重新部署生产环境，否则账号无法持久保存。"}, 503)
             return
         if kv_enabled():
             if kv_get_user_by_email(email):
@@ -1939,7 +1957,7 @@ class TalentMapHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "请输入 6 位邮箱验证码。"}, 400)
             return
         if os.getenv("VERCEL") and not kv_enabled():
-            self.send_json({"error": "线上注册需要先配置 KV_REST_API_URL 和 KV_REST_API_TOKEN，否则账号无法持久保存。"}, 503)
+            self.send_json({"error": "线上注册需要配置 Redis REST 环境变量（KV_REST_API_URL/KV_REST_API_TOKEN 或 UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN），并重新部署生产环境，否则账号无法持久保存。"}, 503)
             return
         if kv_enabled():
             if kv_get_user_by_email(email):
