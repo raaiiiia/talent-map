@@ -713,8 +713,112 @@ function exampleScore(example, contextText) {
   }, 0);
 }
 
+function splitContextItems(text = "", limit = 3) {
+  return String(text)
+    .split(/[，、,;；\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function inferRoleFromWizardContext(answers) {
+  const text = Object.values(answers).join(" ");
+  const roleHints = [
+    "AI算法工程师",
+    "算法/AI工程师",
+    "算法工程师",
+    "机器学习工程师",
+    "数据科学家",
+    "数据分析师",
+    "产品经理",
+    "增长产品经理",
+    "数据产品经理",
+    "AI产品经理",
+    "电商运营负责人",
+    "电商运营",
+    "内容运营",
+    "用户运营",
+    "增长运营",
+    "前端工程师",
+    "后端工程师",
+    "全栈工程师",
+    "移动端工程师",
+    "招聘经理",
+    "HRBP",
+    "财务经理",
+    "法务合规",
+    "品牌市场",
+    "投放优化师",
+    "UI/UX设计师",
+    "视觉设计师",
+  ];
+  const exact = roleHints.find((role) => text.includes(role));
+  if (exact) return exact.replace("算法/AI工程师", "AI算法工程师");
+  if (/(AI|AIGC|大模型|算法|机器学习|深度学习|推荐|搜索|NLP|多模态)/i.test(text)) return "AI算法工程师";
+  if (/(数据|BI|指标|分析|实验|SQL|增长漏斗)/i.test(text)) return "数据分析/科学候选人";
+  if (/(产品|SaaS|需求|原型|商业化|MVP)/i.test(text)) return "产品经理";
+  if (/(电商|直播|GMV|投流|货盘|主播)/i.test(text)) return "电商运营负责人";
+  if (/(内容|短视频|选题|脚本|抖音|小红书|B站|视频号)/i.test(text)) return "内容运营";
+  if (/(前端|React|Vue|TypeScript|中后台|可视化)/i.test(text)) return "前端工程师";
+  if (/(招聘|HR|人力|组织|绩效|人才地图)/i.test(text)) return "招聘/HR候选人";
+  return "目标岗位";
+}
+
+function inferDirectionFromWizardContext(text) {
+  if (/(AI|AIGC|大模型|RAG|Agent|Prompt|算法|模型)/i.test(text)) return "AI能力落地";
+  if (/(SaaS|企业服务|中后台|平台产品|B2B)/i.test(text)) return "企业服务或平台产品";
+  if (/(电商|直播|GMV|投流|货盘|品牌自播)/i.test(text)) return "交易转化";
+  if (/(内容|短视频|账号|选题|脚本|爆款)/i.test(text)) return "内容增长";
+  if (/(数据|BI|指标|实验|漏斗|增长)/i.test(text)) return "数据增长";
+  return "前面填写的业务方向";
+}
+
+function buildLevelExamples() {
+  const answers = answersByKey();
+  const contextText = Object.values(answers).join(" ");
+  const role = inferRoleFromWizardContext(answers);
+  const direction = inferDirectionFromWizardContext(contextText);
+  const skillText = splitContextItems(answers.skills, 3).join("、") || direction;
+  const companyScope = splitContextItems(answers.company_pool, 2).join("、") || "前面填写的目标公司/业务类型";
+  const city = ["北京", "上海", "杭州", "深圳", "广州", "苏州", "南京", "成都", "武汉", "宁波"].find((item) => contextText.includes(item));
+  const scopeNote = city ? `${city}及周边` : "目标地区";
+  return [
+    {
+      role: "3-5年核心执行",
+      tags: [role, direction, scopeNote, "3-5年"],
+      text: `3-5年：适合作为${role}核心执行层，要求能独立负责${direction}模块；履历里要看到${skillText}相关项目、个人贡献和可验证结果。`,
+    },
+    {
+      role: "5-8年骨干负责人",
+      tags: [role, direction, companyScope, "5-8年"],
+      text: `5-8年：优先${role}骨干或小负责人，除独立交付外，需要跨团队推进、关键指标复盘和复杂项目经验；可重点从${companyScope}中筛选相近履历。`,
+    },
+    {
+      role: "8年以上专家/负责人",
+      tags: [role, direction, "8年以上"],
+      text: `8年以上：适合专家线或负责人线，要求搭过方法论、流程或团队；如果岗位偏${direction}，履历要能证明从策略、执行到结果复盘的完整闭环。`,
+    },
+    {
+      role: "潜力型候选人",
+      tags: [role, direction, "潜力型"],
+      text: `潜力型：年限可放宽到2-4年，但必须有公开作品、项目链接、GitHub/账号主页、数据结果或其他证据，且与${role}和${direction}方向高度匹配。`,
+    },
+    {
+      role: "管理经验口径",
+      tags: [role, "管理经验", "模块owner"],
+      text: `管理要求：如果岗位不强调带团队，可写“不要求管理经验，优先模块owner”；如果要负责人，则要求带过3-10人团队或主导过跨部门项目。`,
+    },
+    {
+      role: "排除与风险",
+      tags: [role, direction, "排除项"],
+      text: `排除范围：排除只有泛执行经历、无法说明个人贡献、成果与${direction}不匹配、履历频繁跳动且无合理解释，或缺少可验证证据的人。`,
+    },
+  ];
+}
+
 function currentExampleItems(question = currentQuestion()) {
   if (!question) return [];
+  if (question.key === "level") return buildLevelExamples();
   const fallback = question.examples && question.examples.length ? question.examples : question.example ? [question.example] : [];
   const base = EXAMPLE_LIBRARY[question.key] || fallback;
   const contextText = Object.values(answersByKey()).join(" ");
