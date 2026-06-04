@@ -102,6 +102,60 @@ const WIZARD_QUESTIONS = [
   },
 ];
 
+const WIZARD_ROLE_GROUPS = [
+  {
+    title: "开发类",
+    summary: "面向工程交付、架构演进和 AI 能力落地的技术候选人。",
+    jobs: [
+      ["前端工程师", "招聘前端工程师，负责 Web 产品体验、组件体系和性能优化，优先关注 BOSS直聘、掘金、GitHub、脉脉。"],
+      ["后端工程师", "招聘后端工程师，负责核心服务、接口架构、数据治理和系统稳定性，优先关注 BOSS直聘、猎聘、GitHub、脉脉。"],
+      ["全栈工程师", "招聘全栈工程师，负责从前端体验到后端服务的完整交付，关注 SaaS、AI 工具和中后台产品经验。"],
+      ["移动端工程师", "招聘移动端工程师，负责 iOS/Android 或跨端应用开发，关注 App 性能、工程化和业务增长经验。"],
+      ["算法/AI工程师", "招聘算法/AI工程师，负责推荐、搜索、NLP 或多模态模型落地，优先关注 GitHub、LinkedIn、猎聘、脉脉。"],
+    ],
+  },
+  {
+    title: "产品类",
+    summary: "覆盖用户需求、增长路径和 AI 工具商业化的产品候选人。",
+    jobs: [
+      ["产品经理", "招聘产品经理，负责需求拆解、原型设计、跨团队推进和数据复盘，重点关注 AI 工具、SaaS 或平台产品经验。"],
+      ["增长产品经理", "招聘增长产品经理，负责获客、转化、留存和实验体系，关注有明确增长指标和业务闭环的候选人。"],
+      ["数据产品经理", "招聘数据产品经理，负责指标体系、BI 看板、数据资产和分析工具，关注 SQL、数据治理和业务解释能力。"],
+      ["AI产品经理", "招聘 AI 产品经理，负责模型能力产品化、Prompt/RAG/Agent 场景落地和商业化验证，关注从 0 到 1 经验。"],
+    ],
+  },
+  {
+    title: "运营类",
+    summary: "面向内容、用户、增长和交易转化的运营候选人。",
+    jobs: [
+      ["内容运营", "招聘内容运营，负责选题、脚本、账号增长和内容复盘，重点关注抖音、小红书、B站、视频号等平台作品证据。"],
+      ["用户运营", "招聘用户运营，负责用户分层、社群、活动和留存提升，关注可量化指标和跨部门协作经验。"],
+      ["电商运营", "招聘电商运营，负责货盘、投流、直播间转化和 GMV 复盘，优先关注淘宝直播、抖音电商和品牌自播经验。"],
+      ["增长运营", "招聘增长运营，负责渠道投放、转化漏斗、A/B 实验和增长策略，关注数据驱动和低成本获客经验。"],
+    ],
+  },
+  {
+    title: "职能类",
+    summary: "覆盖招聘、人力、财务、法务等组织支撑岗位。",
+    jobs: [
+      ["招聘经理", "招聘招聘经理，负责关键岗位交付、人才地图、面试流程和渠道管理，关注互联网、AI 或 B2B 团队经验。"],
+      ["HRBP", "招聘 HRBP，负责组织诊断、绩效、人才发展和业务团队协同，关注高成长团队支持经验。"],
+      ["财务经理", "招聘财务经理，负责预算、经营分析、现金流和合规，关注企业服务或互联网业务模型理解。"],
+      ["法务合规", "招聘法务合规候选人，负责合同、数据合规、知识产权和商业风险控制，关注科技公司经验。"],
+    ],
+  },
+  {
+    title: "市场设计类",
+    summary: "面向品牌传播、投放转化和用户体验表达的候选人。",
+    jobs: [
+      ["品牌市场", "招聘品牌市场候选人，负责品牌定位、整合传播、内容策划和项目执行，关注可验证案例和传播结果。"],
+      ["投放优化师", "招聘投放优化师，负责信息流投放、素材测试、ROI 优化和数据复盘，关注抖音、腾讯、巨量等渠道经验。"],
+      ["UI/UX设计师", "招聘 UI/UX 设计师，负责 Web/移动端产品体验、设计系统和交互原型，关注作品集质量和业务理解。"],
+      ["视觉设计师", "招聘视觉设计师，负责品牌视觉、运营素材和活动页面，关注审美稳定性、交付效率和完整作品集。"],
+    ],
+  },
+];
+
 const EXAMPLE_LIBRARY = {
   scope: [
     {
@@ -318,6 +372,7 @@ const state = {
   config: null,
   view: "wizard",
   wizardAnswers: [],
+  wizardStarted: false,
   busy: false,
   thinking: false,
   authMode: "login",
@@ -708,6 +763,7 @@ function defaultAnswer(question) {
 async function advanceWizard(answer) {
   const q = currentQuestion();
   if (!q) return;
+  state.wizardStarted = true;
   if (state.wizardAnswers.length === WIZARD_QUESTIONS.length - 1) {
     setBusy(true);
     try {
@@ -776,8 +832,65 @@ async function createProjectFromWizard(answerFromForm = "") {
   showNotice("项目已创建。你可以先查看检索方案，也可以在设置里填入 Tavily / DeepSeek Key 后启动公开检索。", "success");
 }
 
+function renderWizardStart() {
+  return `
+    <section class="wizard-start" aria-labelledby="wizardStartTitle">
+      <div class="wizard-start-hero">
+        <p class="eyebrow">Talent Map AI Search</p>
+        <h1 id="wizardStartTitle">AI检索你的候选人</h1>
+        <p>从岗位方向开始，系统会把你的描述整理成候选人检索方案，并继续追问筛选口径、目标公司和交付格式。</p>
+        <button class="wizard-start-button" data-action="start-wizard" type="button">开始</button>
+      </div>
+      <div class="role-catalog" aria-label="候选人类型">
+        ${WIZARD_ROLE_GROUPS.map(
+          (group, index) => `
+            <article class="role-card" style="--delay:${index * 45}ms;">
+              <div class="role-card-copy">
+                <span class="role-kicker">类型 0${index + 1}</span>
+                <h2>${escapeHtml(group.title)}</h2>
+                <p>${escapeHtml(group.summary)}</p>
+              </div>
+              <div class="role-card-jobs">
+                ${group.jobs
+                  .map(
+                    ([label, prompt]) => `
+                      <button class="role-chip" data-action="start-role-search" data-role="${escapeHtml(label)}" data-prompt="${escapeHtml(prompt)}" type="button">
+                        ${escapeHtml(label)}
+                      </button>
+                    `
+                  )
+                  .join("")}
+              </div>
+            </article>
+          `
+        ).join("")}
+      </div>
+    </section>
+  `;
+}
+
+async function startWizardWithPrompt(prompt = "") {
+  state.wizardStarted = true;
+  state.thinking = false;
+  render();
+  await wait(160);
+  const textarea = byId("wizardAnswer");
+  if (textarea) {
+    textarea.value = prompt;
+    textarea.focus();
+  }
+  if (prompt) {
+    await wait(120);
+    await advanceWizard(prompt);
+  }
+}
+
 function renderWizard() {
-  setPageMeta("", "通过 AI 问答检索你的候选人");
+  setPageMeta("", "创建项目");
+  if (!state.wizardStarted && !state.wizardAnswers.length && !state.project && !state.thinking) {
+    byId("content").innerHTML = renderWizardStart();
+    return;
+  }
   const q = currentQuestion();
   const exampleItems = currentExampleItems(q);
   const messages = [];
@@ -821,7 +934,7 @@ function renderWizard() {
     : "";
 
   const wizardHtml = `
-    <div class="wizard-home">
+    <div class="wizard-home wizard-dialog-page">
       <div class="page-head wizard-intro">
         <h1>通过 AI 问答检索你的候选人</h1>
         <p>像和招聘顾问对话一样输入岗位、要求、地理位置、目标公司和筛选口径，系统会整理成项目并生成候选人检索方案。</p>
@@ -1752,6 +1865,7 @@ async function handleSubmit(event) {
         showNotice(canSkipQuestion(q) ? "请先输入描述、选择示例，或点击“跳过”。" : "请先输入具体应聘岗位和基础筛选范围。", "error");
         return;
       }
+      state.wizardStarted = true;
       await advanceWizard(answer);
     }
 
@@ -1892,6 +2006,15 @@ async function handleClick(event) {
     return;
   }
 
+  if (action === "start-wizard") {
+    await startWizardWithPrompt("");
+    return;
+  }
+  if (action === "start-role-search") {
+    await startWizardWithPrompt(actionEl.dataset.prompt || "");
+    return;
+  }
+
   if (action === "select-project") {
     setBusy(true);
     try {
@@ -1904,6 +2027,7 @@ async function handleClick(event) {
     } finally {
       setBusy(false);
     }
+    return;
   }
   if (action === "new-project" || action === "go-wizard") {
     state.project = null;
@@ -1913,12 +2037,15 @@ async function handleClick(event) {
     localStorage.removeItem("talent_map_active_project");
     state.view = "wizard";
     state.wizardAnswers = [];
+    state.wizardStarted = false;
     state.thinking = false;
     renderShell();
     render();
+    return;
   }
   if (action === "reset-wizard") {
     state.wizardAnswers = [];
+    state.wizardStarted = false;
     state.thinking = false;
     state.project = null;
     state.plan = null;
@@ -1927,11 +2054,14 @@ async function handleClick(event) {
     localStorage.removeItem("talent_map_active_project");
     renderShell();
     render();
+    return;
   }
     if (action === "answer-default") {
       const q = currentQuestion();
       if (!q) return;
+      state.wizardStarted = true;
       await advanceWizard(defaultAnswer(q));
+      return;
     }
     if (action === "toggle-examples") {
       const catalog = byId("exampleCatalog");
@@ -1939,6 +2069,7 @@ async function handleClick(event) {
       const willOpen = catalog.hidden;
       catalog.hidden = !willOpen;
       actionEl.setAttribute("aria-expanded", String(willOpen));
+      return;
     }
     if (action === "apply-example") {
       const index = Number(actionEl.dataset.exampleIndex);
@@ -1950,13 +2081,17 @@ async function handleClick(event) {
         textarea.value = example;
         textarea.focus();
       }
+      return;
     }
     if (action === "skip-question") {
       const q = currentQuestion();
       if (!canSkipQuestion(q)) return;
+      state.wizardStarted = true;
       await advanceWizard(SKIPPED_ANSWER);
+      return;
     }
   if (action === "create-default-project") {
+    state.wizardStarted = true;
     state.wizardAnswers = WIZARD_QUESTIONS.map((q) => ({ key: q.key, title: q.title, question: q.prompt, answer: defaultAnswer(q) }));
     setBusy(true);
     try {
@@ -1975,11 +2110,13 @@ async function handleClick(event) {
     } finally {
       setBusy(false);
     }
+    return;
   }
   if (action === "back-question") {
     state.wizardAnswers.pop();
     state.thinking = false;
     render();
+    return;
   }
   if (action === "discover") {
     await discoverCandidates();
@@ -2100,6 +2237,8 @@ async function init() {
     state.candidates = [];
     state.activeProjectId = null;
     state.wizardAnswers = [];
+    state.wizardStarted = false;
+    state.thinking = false;
     localStorage.removeItem("talent_map_active_project");
     setView("wizard");
   });
