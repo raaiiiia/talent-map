@@ -9,6 +9,8 @@ import json
 import os
 import random
 import re
+import socket
+import ssl
 import smtplib
 import sqlite3
 import sys
@@ -236,18 +238,105 @@ def kv_credentials() -> tuple[str | None, str | None]:
     return (url.rstrip("/") if url else None, token.strip() if token else None)
 
 
+def redis_url() -> str | None:
+    return first_env("REDIS_URL", "KV_URL", "UPSTASH_REDIS_URL")
+
+
 def kv_enabled() -> bool:
     url, token = kv_credentials()
-    return bool(url and token)
+    return bool((url and token) or redis_url())
 
 
 def kv_key(*parts: object) -> str:
     return ":".join([KV_PREFIX, *[str(part).strip().lower() for part in parts]])
 
 
+def redis_encode(parts: tuple[object, ...]) -> bytes:
+    payload = [f"*{len(parts)}\r\n".encode("utf-8")]
+    for part in parts:
+        data = str(part).encode("utf-8")
+        payload.append(f"${len(data)}\r\n".encode("utf-8"))
+        payload.append(data + b"\r\n")
+    return b"".join(payload)
+
+
+def redis_read_line(stream) -> bytes:
+    line = stream.readline()
+    if not line:
+        raise RuntimeError("Redis connection closed.")
+    if not line.endswith(b"\r\n"):
+        raise RuntimeError("Invalid Redis response.")
+    return line[:-2]
+
+
+def redis_read_response(stream):
+    prefix = stream.read(1)
+    if not prefix:
+        raise RuntimeError("Redis connection closed.")
+    if prefix == b"+":
+        return redis_read_line(stream).decode("utf-8")
+    if prefix == b"-":
+        message = redis_read_line(stream).decode("utf-8", "replace")
+        raise RuntimeError(f"Redis error: {message}")
+    if prefix == b":":
+        return int(redis_read_line(stream))
+    if prefix == b"$":
+        length = int(redis_read_line(stream))
+        if length < 0:
+            return None
+        data = stream.read(length)
+        ending = stream.read(2)
+        if ending != b"\r\n":
+            raise RuntimeError("Invalid Redis bulk response.")
+        return data.decode("utf-8")
+    if prefix == b"*":
+        length = int(redis_read_line(stream))
+        if length < 0:
+            return None
+        return [redis_read_response(stream) for _ in range(length)]
+    raise RuntimeError("Unknown Redis response.")
+
+
+def redis_command_from_url(url: str, *command: object):
+    parsed = urlparse(url)
+    if parsed.scheme not in {"redis", "rediss"}:
+        raise RuntimeError("REDIS_URL must start with redis:// or rediss://.")
+    host = parsed.hostname
+    if not host:
+        raise RuntimeError("REDIS_URL is missing a host.")
+    port = parsed.port or 6379
+    try:
+        sock = socket.create_connection((host, port), timeout=10)
+        if parsed.scheme == "rediss":
+            sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
+        with sock:
+            stream = sock.makefile("rwb")
+            if parsed.password:
+                if parsed.username:
+                    auth = ("AUTH", unquote(parsed.username), unquote(parsed.password))
+                else:
+                    auth = ("AUTH", unquote(parsed.password))
+                stream.write(redis_encode(auth))
+                stream.flush()
+                redis_read_response(stream)
+            db_name = parsed.path.lstrip("/")
+            if db_name:
+                stream.write(redis_encode(("SELECT", db_name)))
+                stream.flush()
+                redis_read_response(stream)
+            stream.write(redis_encode(command))
+            stream.flush()
+            return redis_read_response(stream)
+    except OSError as exc:
+        raise RuntimeError(f"Redis request failed: {exc}") from exc
+
+
 def kv_command(*command: object):
     url, token = kv_credentials()
     if not url or not token:
+        fallback_url = redis_url()
+        if fallback_url:
+            return redis_command_from_url(fallback_url, *command)
         raise RuntimeError("KV storage is not configured.")
     body = json.dumps([str(part) for part in command], ensure_ascii=False).encode("utf-8")
     req = urlrequest.Request(
@@ -1861,7 +1950,7 @@ class TalentMapHandler(BaseHTTPRequestHandler):
         hour_cutoff = (datetime.now(LOCAL_TZ) - timedelta(hours=1)).isoformat(timespec="seconds")
         code = f"{random.randint(0, 999999):06d}"
         if os.getenv("VERCEL") and not kv_enabled():
-            self.send_json({"error": "线上注册需要配置 Redis REST 环境变量（KV_REST_API_URL/KV_REST_API_TOKEN 或 UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN），并重新部署生产环境，否则账号无法持久保存。"}, 503)
+            self.send_json({"error": "线上注册需要配置 Redis 环境变量（REDIS_URL，或 KV_REST_API_URL/KV_REST_API_TOKEN，或 UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN），并重新部署生产环境，否则账号无法持久保存。"}, 503)
             return
         if kv_enabled():
             if kv_get_user_by_email(email):
@@ -1957,7 +2046,7 @@ class TalentMapHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "请输入 6 位邮箱验证码。"}, 400)
             return
         if os.getenv("VERCEL") and not kv_enabled():
-            self.send_json({"error": "线上注册需要配置 Redis REST 环境变量（KV_REST_API_URL/KV_REST_API_TOKEN 或 UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN），并重新部署生产环境，否则账号无法持久保存。"}, 503)
+            self.send_json({"error": "线上注册需要配置 Redis 环境变量（REDIS_URL，或 KV_REST_API_URL/KV_REST_API_TOKEN，或 UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN），并重新部署生产环境，否则账号无法持久保存。"}, 503)
             return
         if kv_enabled():
             if kv_get_user_by_email(email):
