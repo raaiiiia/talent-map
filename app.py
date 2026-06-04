@@ -54,6 +54,9 @@ DB_PATH = DATA_DIR / "talent_map.sqlite3"
 FALLBACK_DB_PATH = DATA_DIR / "talent_map.app.sqlite3"
 LOCAL_TZ = timezone(timedelta(hours=8))
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+KV_PREFIX = os.getenv("TALENT_MAP_KV_PREFIX", "talent_map").strip() or "talent_map"
+KV_USER_ID_OFFSET = 1_000_000
+SESSION_TTL_SECONDS = 14 * 24 * 60 * 60
 
 DEFAULT_PROFILE = {
     "main_direction": "视频创作",
@@ -209,6 +212,181 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(pbkdf2_hash(password, salt).split("$", 1)[1], digest)
 
 
+def kv_credentials() -> tuple[str | None, str | None]:
+    url = os.getenv("KV_REST_API_URL") or os.getenv("UPSTASH_REDIS_REST_URL")
+    token = os.getenv("KV_REST_API_TOKEN") or os.getenv("UPSTASH_REDIS_REST_TOKEN")
+    return (url.rstrip("/") if url else None, token.strip() if token else None)
+
+
+def kv_enabled() -> bool:
+    url, token = kv_credentials()
+    return bool(url and token)
+
+
+def kv_key(*parts: object) -> str:
+    return ":".join([KV_PREFIX, *[str(part).strip().lower() for part in parts]])
+
+
+def kv_command(*command: object):
+    url, token = kv_credentials()
+    if not url or not token:
+        raise RuntimeError("KV storage is not configured.")
+    body = json.dumps([str(part) for part in command], ensure_ascii=False).encode("utf-8")
+    req = urlrequest.Request(
+        url,
+        data=body,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=10) as resp:
+            payload = json.loads(resp.read().decode("utf-8") or "{}")
+    except (HTTPError, URLError, OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"KV storage request failed: {exc}") from exc
+    if payload.get("error"):
+        raise RuntimeError(f"KV storage error: {payload['error']}")
+    return payload.get("result")
+
+
+def kv_get_json(key: str):
+    raw = kv_command("GET", key)
+    if raw is None:
+        return None
+    if isinstance(raw, (dict, list)):
+        return raw
+    return json.loads(str(raw))
+
+
+def kv_set_json(key: str, value, ttl_seconds: int | None = None) -> None:
+    payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    if ttl_seconds:
+        kv_command("SET", key, payload, "EX", ttl_seconds)
+    else:
+        kv_command("SET", key, payload)
+
+
+def kv_delete(key: str) -> None:
+    kv_command("DEL", key)
+
+
+def kv_next_id(name: str) -> int:
+    return int(kv_command("INCR", kv_key("seq", name)))
+
+
+def kv_user_key(user_id: int | str) -> str:
+    return kv_key("user", user_id)
+
+
+def kv_user_email_key(email: str) -> str:
+    return kv_key("user_email", email.lower())
+
+
+def kv_session_key(token: str) -> str:
+    return kv_key("session", token)
+
+
+def kv_verification_key(email: str) -> str:
+    return kv_key("email_verification", email.lower())
+
+
+def kv_rate_key(kind: str, value: str) -> str:
+    return kv_key("rate", kind, value)
+
+
+def kv_recent_timestamps(key: str, cutoff: str) -> list[str]:
+    timestamps = kv_get_json(key) or []
+    return [ts for ts in timestamps if isinstance(ts, str) and ts > cutoff]
+
+
+def kv_store_timestamps(key: str, timestamps: list[str], ttl_seconds: int = 3600) -> None:
+    kv_set_json(key, timestamps, ttl_seconds)
+
+
+def kv_get_user_by_id(user_id: int | str) -> dict[str, Any] | None:
+    user = kv_get_json(kv_user_key(user_id))
+    return user if isinstance(user, dict) else None
+
+
+def kv_get_user_by_email(email: str) -> dict[str, Any] | None:
+    user_id = kv_command("GET", kv_user_email_key(email))
+    return kv_get_user_by_id(user_id) if user_id else None
+
+
+def kv_save_user(user: dict[str, Any]) -> None:
+    kv_set_json(kv_user_key(user["id"]), user)
+    kv_command("SET", kv_user_email_key(user["email"]), user["id"])
+
+
+def ensure_sqlite_user_for_kv_user(user: dict[str, Any]) -> None:
+    user_id = int(user["id"])
+    values = (
+        user_id,
+        user["email"],
+        user.get("name") or "",
+        user.get("password_hash") or "",
+        user.get("role") or "registered",
+        user.get("created_at") or now_iso(),
+        int(user.get("email_verified", 1)),
+        int(user.get("free_searches_remaining", 0)),
+    )
+    with db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM users WHERE id = ? OR email = ? ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END LIMIT 1",
+            (user_id, user["email"], user_id),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE users
+                SET id = ?, email = ?, name = ?, password_hash = ?, role = ?, created_at = ?,
+                    email_verified = ?, free_searches_remaining = ?
+                WHERE id = ?
+                """,
+                (*values, existing["id"]),
+            )
+            return
+        conn.execute(
+            """
+            INSERT INTO users (id, email, name, password_hash, role, created_at, email_verified, free_searches_remaining)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            values,
+        )
+
+
+def kv_create_session(user_id: int) -> str:
+    token = secrets.token_urlsafe(32)
+    kv_command("SET", kv_session_key(token), user_id, "EX", SESSION_TTL_SECONDS)
+    return token
+
+
+def kv_user_for_token(token: str) -> dict[str, Any] | None:
+    user_id = kv_command("GET", kv_session_key(token))
+    if not user_id:
+        return None
+    user = kv_get_user_by_id(user_id)
+    if not user:
+        kv_delete(kv_session_key(token))
+        return None
+    ensure_sqlite_user_for_kv_user(user)
+    return user
+
+
+def kv_consume_free_search(user_id: int) -> bool:
+    user = kv_get_user_by_id(user_id)
+    if not user:
+        return False
+    if user.get("role") != "registered":
+        return True
+    remaining = int(user.get("free_searches_remaining", 0))
+    if remaining <= 0:
+        return False
+    user["free_searches_remaining"] = remaining - 1
+    kv_save_user(user)
+    ensure_sqlite_user_for_kv_user(user)
+    return True
+
+
 def ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
     columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if column not in columns:
@@ -236,6 +414,8 @@ def has_search_quota(user: sqlite3.Row | dict[str, Any]) -> bool:
 
 
 def consume_free_search(user_id: int) -> bool:
+    if kv_enabled() and int(user_id) >= KV_USER_ID_OFFSET:
+        return kv_consume_free_search(int(user_id))
     with db() as conn:
         row = conn.execute("SELECT role, free_searches_remaining FROM users WHERE id = ?", (user_id,)).fetchone()
         if not row:
@@ -1319,6 +1499,13 @@ class TalentMapHandler(BaseHTTPRequestHandler):
         if not auth.startswith("Bearer "):
             return None
         token = auth.removeprefix("Bearer ").strip()
+        if kv_enabled():
+            try:
+                user = kv_user_for_token(token)
+            except RuntimeError:
+                user = None
+            if user:
+                return user
         with db() as conn:
             row = conn.execute(
                 """
@@ -1494,6 +1681,15 @@ class TalentMapHandler(BaseHTTPRequestHandler):
             payload = self.read_json()
             email = str(payload.get("email", "")).strip().lower()
             password = str(payload.get("password", ""))
+            if kv_enabled():
+                user = kv_get_user_by_email(email)
+                if not user or not verify_password(password, str(user.get("password_hash") or "")):
+                    self.send_json({"error": "账号或密码不正确"}, 401)
+                    return
+                ensure_sqlite_user_for_kv_user(user)
+                token = kv_create_session(int(user["id"]))
+                self.send_json({"token": token, "user": user_to_api(user)})
+                return
             with db() as conn:
                 user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
                 if not user or not verify_password(password, user["password_hash"]):
@@ -1646,6 +1842,51 @@ class TalentMapHandler(BaseHTTPRequestHandler):
         sent_cutoff = (datetime.now(LOCAL_TZ) - timedelta(seconds=60)).isoformat(timespec="seconds")
         hour_cutoff = (datetime.now(LOCAL_TZ) - timedelta(hours=1)).isoformat(timespec="seconds")
         code = f"{random.randint(0, 999999):06d}"
+        if os.getenv("VERCEL") and not kv_enabled():
+            self.send_json({"error": "线上注册需要先配置 KV_REST_API_URL 和 KV_REST_API_TOKEN，否则账号无法持久保存。"}, 503)
+            return
+        if kv_enabled():
+            if kv_get_user_by_email(email):
+                self.send_json({"error": "该邮箱已注册，请直接登录。"}, 400)
+                return
+            verification = kv_get_json(kv_verification_key(email))
+            if verification and str(verification.get("sent_at") or "") > sent_cutoff:
+                self.send_json({"error": "验证码发送太频繁，请稍后再试。"}, 429)
+                return
+            email_rate_key = kv_rate_key("email", email)
+            ip_rate_key = kv_rate_key("ip", ip_address)
+            email_times = kv_recent_timestamps(email_rate_key, hour_cutoff)
+            ip_times = kv_recent_timestamps(ip_rate_key, hour_cutoff)
+            if len(email_times) + len(ip_times) >= 8:
+                self.send_json({"error": "验证码请求次数过多，请一小时后再试。"}, 429)
+                return
+            sent_at = now_iso()
+            expires_at = (datetime.now(LOCAL_TZ) + timedelta(minutes=10)).isoformat(timespec="seconds")
+            kv_set_json(
+                kv_verification_key(email),
+                {
+                    "email": email,
+                    "code_hash": code_hash(email, code),
+                    "ip_address": ip_address,
+                    "expires_at": expires_at,
+                    "sent_at": sent_at,
+                    "created_at": sent_at,
+                    "attempts": 0,
+                },
+                600,
+            )
+            kv_store_timestamps(email_rate_key, [*email_times, sent_at])
+            kv_store_timestamps(ip_rate_key, [*ip_times, sent_at])
+            try:
+                send_verification_email(email, code)
+            except RuntimeError as exc:
+                self.send_json({"error": str(exc)}, 500)
+                return
+            except (smtplib.SMTPException, OSError) as exc:
+                self.send_json({"error": f"验证码邮件发送失败：{exc}"}, 502)
+                return
+            self.send_json({"ok": True, "message": "验证码已发送，请在 10 分钟内完成注册。"})
+            return
         with db() as conn:
             if conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone():
                 self.send_json({"error": "该邮箱已注册，请直接登录。"}, 400)
@@ -1696,6 +1937,44 @@ class TalentMapHandler(BaseHTTPRequestHandler):
             return
         if not re.fullmatch(r"\d{6}", code):
             self.send_json({"error": "请输入 6 位邮箱验证码。"}, 400)
+            return
+        if os.getenv("VERCEL") and not kv_enabled():
+            self.send_json({"error": "线上注册需要先配置 KV_REST_API_URL 和 KV_REST_API_TOKEN，否则账号无法持久保存。"}, 503)
+            return
+        if kv_enabled():
+            if kv_get_user_by_email(email):
+                self.send_json({"error": "该邮箱已注册，请直接登录。"}, 400)
+                return
+            verification = kv_get_json(kv_verification_key(email))
+            if not verification or str(verification.get("expires_at") or "") < now_iso():
+                self.send_json({"error": "验证码不存在或已过期，请重新获取。"}, 400)
+                return
+            attempts = int(verification.get("attempts") or 0)
+            if attempts >= 5:
+                self.send_json({"error": "验证码尝试次数过多，请重新获取。"}, 400)
+                return
+            if not hmac.compare_digest(str(verification.get("code_hash") or ""), code_hash(email, code)):
+                verification["attempts"] = attempts + 1
+                kv_set_json(kv_verification_key(email), verification, 600)
+                self.send_json({"error": "验证码不正确。"}, 400)
+                return
+            kv_delete(kv_verification_key(email))
+            now = now_iso()
+            user_id = KV_USER_ID_OFFSET + kv_next_id("users")
+            user = {
+                "id": user_id,
+                "email": email,
+                "name": name,
+                "role": "registered",
+                "password_hash": pbkdf2_hash(password),
+                "created_at": now,
+                "email_verified": 1,
+                "free_searches_remaining": 1,
+            }
+            kv_save_user(user)
+            ensure_sqlite_user_for_kv_user(user)
+            token = kv_create_session(user_id)
+            self.send_json({"token": token, "user": user_to_api(user)}, 201)
             return
         with db() as conn:
             if conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone():
