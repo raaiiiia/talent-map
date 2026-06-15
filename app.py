@@ -1160,6 +1160,25 @@ def build_profile_from_answers(answers: list[dict[str, str]] | None, draft: dict
     return profile
 
 
+def is_technical_profile(profile: dict[str, Any]) -> bool:
+    profile_text = json.dumps(profile, ensure_ascii=False).lower()
+    technical_terms = [
+        "算法",
+        "人工智能",
+        "机器学习",
+        "深度学习",
+        "推荐系统",
+        "搜索排序",
+        "多模态",
+        "python",
+        "pytorch",
+        "tensorflow",
+        "nlp",
+        "llm",
+    ]
+    return any(term in profile_text for term in technical_terms)
+
+
 def build_search_plan(profile: dict[str, Any]) -> dict[str, Any]:
     cities = normalize_list(profile.get("region")) or ["杭州", "上海", "苏州", "南京"]
     platforms = normalize_list(profile.get("platforms")) or DEFAULT_PROFILE["platforms"]
@@ -1167,68 +1186,109 @@ def build_search_plan(profile: dict[str, Any]) -> dict[str, Any]:
     industries = normalize_list(profile.get("industries")) or DEFAULT_PROFILE["industries"]
     company_types = normalize_list(profile.get("company_types")) or DEFAULT_PROFILE["company_types"]
 
-    related_keywords = list(
-        dict.fromkeys(
-            [
-                "短视频编导",
-                "内容策划",
-                "品牌广告",
-                "商业案例",
-                "爆款选题",
-                "剪辑节奏",
-                "调色",
-                "脚本",
-                "文案",
-                "AIGC视频",
-                "AI辅助创作",
-                "账号运营",
-                "直播内容",
-                "内容负责人",
-                "创意总监",
-                "作品集",
-                "复盘",
-            ]
-            + content_types
-            + platforms
+    if is_technical_profile(profile):
+        algorithm_tags = normalize_list(profile.get("ai_algorithm_tags"))
+        related_keywords = list(
+            dict.fromkeys(
+                algorithm_tags
+                + [
+                    "算法工程师",
+                    "机器学习",
+                    "深度学习",
+                    "推荐系统",
+                    "召回排序",
+                    "自然语言处理",
+                    "多模态",
+                    "Python",
+                    "PyTorch",
+                    "GitHub",
+                    "论文",
+                    "专利",
+                    "技术分享",
+                ]
+            )
         )
-    )
-    competitor_pool = list(
-        dict.fromkeys(
-            [
-                "遥望科技",
-                "无忧传媒",
-                "谦寻",
-                "交个朋友",
-                "新片场",
-                "青藤文化",
-                "蓝色光标",
-                "华扬联众",
-                "字节跳动抖音电商",
-                "小红书商业化",
-                "B站商业化",
-                "淘宝直播",
-                "阿里妈妈",
-                "美ONE",
-                "三只羊网络",
-            ]
+        competitor_pool = list(dict.fromkeys(company_types))
+        focus_terms = algorithm_tags[:4] or ["推荐算法", "搜索排序", "多模态", "机器学习"]
+        query_seeds = []
+        for city in cities[:4]:
+            for focus in focus_terms[:3]:
+                query_seeds.append(f"{city} {focus} 算法工程师 GitHub 技术分享")
+                query_seeds.append(f"{city} {focus} 算法工程师 论文 专利")
+            query_seeds.append(f"site:github.com {city} 算法工程师 Python PyTorch")
+        for company in competitor_pool[:8]:
+            query_seeds.append(f"{company} 算法工程师 推荐 搜索 多模态 技术分享")
+            query_seeds.append(f"{company} 算法工程师 论文 专利 GitHub")
+        queries = list(dict.fromkeys(query_seeds))[:18]
+        narrow_questions = [
+            "优先锁定推荐、搜索、NLP、多模态还是广告算法方向？",
+            "公开证据优先看 GitHub、论文专利、技术分享还是开源项目？",
+            "目标公司是否需要进一步限定到具体业务线？",
+            "经验年限是否限定为3-5年、5-8年或8年以上？",
+        ]
+    else:
+        related_keywords = list(
+            dict.fromkeys(
+                [
+                    "短视频编导",
+                    "内容策划",
+                    "品牌广告",
+                    "商业案例",
+                    "爆款选题",
+                    "剪辑节奏",
+                    "调色",
+                    "脚本",
+                    "文案",
+                    "AIGC视频",
+                    "AI辅助创作",
+                    "账号运营",
+                    "直播内容",
+                    "内容负责人",
+                    "创意总监",
+                    "作品集",
+                    "复盘",
+                ]
+                + content_types
+                + platforms
+            )
         )
-    )
-    query_seeds = []
-    for city in cities[:4]:
-        for platform in platforms[:4]:
-            query_seeds.append(f"{city} {platform} {' '.join(content_types[:3])} 作品 案例")
-            query_seeds.append(f"{city} {platform} 内容负责人 编导 品牌广告 商业案例")
-    for company in competitor_pool[:8]:
-        query_seeds.append(f"{company} 短视频 内容 创意 编导 案例")
-    for company_type in company_types[:4]:
-        query_seeds.append(f"杭州 {company_type} 短视频 编导 内容策划 作品集")
-    queries = list(dict.fromkeys(query_seeds))[:18]
-    narrow_questions = [
-        "优先锁定哪一个平台？例如抖音、小红书、B站或淘宝直播。",
-        "作品类型是否先限定为品牌广告、知识科普、直播内容或AIGC视频？",
-        "候选人优先看企业员工、独立创作者，还是两者都要但分开展示？",
-        "经验年限是否限定为3-5年、5-8年或8年以上？",
-    ]
+        competitor_pool = list(
+            dict.fromkeys(
+                [
+                    "遥望科技",
+                    "无忧传媒",
+                    "谦寻",
+                    "交个朋友",
+                    "新片场",
+                    "青藤文化",
+                    "蓝色光标",
+                    "华扬联众",
+                    "字节跳动抖音电商",
+                    "小红书商业化",
+                    "B站商业化",
+                    "淘宝直播",
+                    "阿里妈妈",
+                    "美ONE",
+                    "三只羊网络",
+                ]
+            )
+        )
+        query_seeds = []
+        for city in cities[:4]:
+            for platform in platforms[:4]:
+                query_seeds.append(f"{city} {platform} {' '.join(content_types[:3])} 作品 案例")
+                query_seeds.append(f"{city} {platform} 内容负责人 编导 品牌广告 商业案例")
+        for company in competitor_pool[:8]:
+            query_seeds.append(f"{company} 短视频 内容 创意 编导 案例")
+        for company_type in company_types[:4]:
+            query_seeds.append(f"杭州 {company_type} 短视频 编导 内容策划 作品集")
+        queries = list(dict.fromkeys(query_seeds))[:18]
+        narrow_questions = [
+            "优先锁定哪一个平台？例如抖音、小红书、B站或淘宝直播。",
+            "作品类型是否先限定为品牌广告、知识科普、直播内容或AIGC视频？",
+            "候选人优先看企业员工、独立创作者，还是两者都要但分开展示？",
+            "经验年限是否限定为3-5年、5-8年或8年以上？",
+        ]
     return {
         "cities": cities,
         "platforms": platforms,
@@ -1315,17 +1375,31 @@ def parse_json_payload(text: str) -> Any:
 
 
 def extract_candidates_with_ai(corpus: str, profile: dict[str, Any], config: dict[str, str]) -> list[dict[str, Any]]:
+    if is_technical_profile(profile):
+        judging_criteria = """判断重点：
+1. 必须能从公开文本确认姓名或稳定账号名，以及算法、机器学习或 AI 相关经历；
+2. 技术证据优先级：GitHub/开源项目、论文、专利、公开技术分享、竞赛或可核验项目；
+3. 重点评估算法方向、工程能力、业务落地、公开技术贡献和目标公司/城市匹配度；
+4. 招聘网页、职位描述、公司新闻若没有指向具体个人，不得当作候选人；
+5. 每位候选人至少保留一个能直接支持推荐理由的来源链接，证据不足时降低 confidence。"""
+        platform_examples = "GitHub/个人主页/论文库/专利库/技术社区/公开演讲平台等"
+        aigc_examples = "大模型应用/多模态/生成式AI/传统机器学习/无明显AIGC/未知"
+    else:
+        judging_criteria = """判断重点：
+1. 作品/账号/商业案例优先；
+2. 选题需要新颖、触及人心或有信息价值；
+3. 剪辑节奏、画面、调色体现创作实力；
+4. 品牌植入能自然融入即可，但需要有经验；
+5. AIGC是加分项，要区分模板化AI生成、纯AI生成、人类创意主导+AI辅助、快速AIGC产能。"""
+        platform_examples = "抖音/小红书/B站/淘宝直播等"
+        aigc_examples = "无明显AIGC/AI辅助剪辑包装/AI辅助脚本分镜/AI图像视频生成/纯AI模板化生成/人类创意主导+AIGC提效/未知"
+
     prompt = f"""
 你是企业HR的人才地图分析助手。请只基于给定公开文本抽取“可被人工复核的候选人线索”，不要编造姓名、公司、职位或作品。
 
 业务方向：{json.dumps(profile, ensure_ascii=False)}
 
-判断重点：
-1. 作品/账号/商业案例优先；
-2. 选题需要新颖、触及人心或有信息价值；
-3. 剪辑节奏、画面、调色体现创作实力；
-4. 品牌植入能自然融入即可，但需要有经验；
-5. AIGC是加分项，要区分模板化AI生成、纯AI生成、人类创意主导+AI辅助、快速AIGC产能。
+{judging_criteria}
 
 输出 JSON 对象，格式：
 {{
@@ -1340,12 +1414,12 @@ def extract_candidates_with_ai(corpus: str, profile: dict[str, Any], config: dic
       "past_companies": ["过往公司"],
       "works": ["公开作品/项目/账号/案例"],
       "source_links": ["来源链接"],
-      "platforms": ["抖音/小红书/B站/淘宝直播等"],
+      "platforms": ["{platform_examples}"],
       "recommendation_reason": "推荐理由，必须引用公开证据",
       "risk_notes": "风险点，例如公开信息不足、个人贡献不清、作品同质化等",
       "score": 0到100的整数,
       "confidence": 0到100的整数,
-      "aigc_usage": "无明显AIGC/AI辅助剪辑包装/AI辅助脚本分镜/AI图像视频生成/纯AI模板化生成/人类创意主导+AIGC提效/未知"
+      "aigc_usage": "{aigc_examples}"
     }}
   ]
 }}
