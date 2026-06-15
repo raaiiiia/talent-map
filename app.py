@@ -421,6 +421,14 @@ def kv_project_candidates_key(project_id: int | str) -> str:
     return kv_key("project", project_id, "candidates")
 
 
+def kv_source_key(source_id: int | str) -> str:
+    return kv_key("source", source_id)
+
+
+def kv_project_sources_key(project_id: int | str) -> str:
+    return kv_key("project", project_id, "sources")
+
+
 def kv_config_key() -> str:
     return kv_key("config")
 
@@ -491,6 +499,11 @@ def kv_list_candidates(project_id: int | str) -> list[dict[str, Any]]:
         ),
         reverse=True,
     )
+
+
+def kv_save_source(source: dict[str, Any]) -> None:
+    kv_set_json(kv_source_key(source["id"]), source)
+    kv_command("ZADD", kv_project_sources_key(source["project_id"]), source["id"], source["id"])
 
 
 def ensure_sqlite_user_for_kv_user(user: dict[str, Any]) -> None:
@@ -1415,6 +1428,20 @@ def fetch_public_page(url: str) -> dict[str, str]:
 
 
 def save_sources(project_id: int, sources: list[dict[str, str]]) -> None:
+    if kv_enabled():
+        for item in sources:
+            source = {
+                "id": kv_next_id("sources"),
+                "project_id": project_id,
+                "url": item.get("url", ""),
+                "title": item.get("title", ""),
+                "content_excerpt": item.get("content", "")[:2000],
+                "source_type": item.get("source_type", "public_web"),
+                "status": item.get("status", "已采集"),
+                "created_at": now_iso(),
+            }
+            kv_save_source(source)
+        return
     with db() as conn:
         for source in sources:
             conn.execute(
