@@ -405,6 +405,26 @@ def kv_rate_key(kind: str, value: str) -> str:
     return kv_key("rate", kind, value)
 
 
+def kv_project_key(project_id: int | str) -> str:
+    return kv_key("project", project_id)
+
+
+def kv_projects_index_key() -> str:
+    return kv_key("projects")
+
+
+def kv_candidate_key(candidate_id: int | str) -> str:
+    return kv_key("candidate", candidate_id)
+
+
+def kv_project_candidates_key(project_id: int | str) -> str:
+    return kv_key("project", project_id, "candidates")
+
+
+def kv_config_key() -> str:
+    return kv_key("config")
+
+
 def kv_recent_timestamps(key: str, cutoff: str) -> list[str]:
     timestamps = kv_get_json(key) or []
     return [ts for ts in timestamps if isinstance(ts, str) and ts > cutoff]
@@ -427,6 +447,50 @@ def kv_get_user_by_email(email: str) -> dict[str, Any] | None:
 def kv_save_user(user: dict[str, Any]) -> None:
     kv_set_json(kv_user_key(user["id"]), user)
     kv_command("SET", kv_user_email_key(user["email"]), user["id"])
+
+
+def kv_save_project(project: dict[str, Any]) -> None:
+    kv_set_json(kv_project_key(project["id"]), project)
+    kv_command("ZADD", kv_projects_index_key(), time.time(), project["id"])
+
+
+def kv_get_project(project_id: int | str) -> dict[str, Any] | None:
+    project = kv_get_json(kv_project_key(project_id))
+    return project if isinstance(project, dict) else None
+
+
+def kv_list_projects(user: dict[str, Any]) -> list[dict[str, Any]]:
+    project_ids = kv_command("ZREVRANGE", kv_projects_index_key(), 0, -1) or []
+    projects = [kv_get_project(project_id) for project_id in project_ids]
+    visible = [project for project in projects if project]
+    if str(user.get("role")) != "admin":
+        visible = [project for project in visible if int(project.get("created_by") or 0) == int(user["id"])]
+    return sorted(visible, key=lambda project: str(project.get("updated_at") or ""), reverse=True)
+
+
+def kv_save_candidate(candidate: dict[str, Any]) -> None:
+    kv_set_json(kv_candidate_key(candidate["id"]), candidate)
+    kv_command("ZADD", kv_project_candidates_key(candidate["project_id"]), candidate["id"], candidate["id"])
+
+
+def kv_get_candidate(candidate_id: int | str) -> dict[str, Any] | None:
+    candidate = kv_get_json(kv_candidate_key(candidate_id))
+    return candidate if isinstance(candidate, dict) else None
+
+
+def kv_list_candidates(project_id: int | str) -> list[dict[str, Any]]:
+    candidate_ids = kv_command("ZREVRANGE", kv_project_candidates_key(project_id), 0, -1) or []
+    candidates = [kv_get_candidate(candidate_id) for candidate_id in candidate_ids]
+    visible = [candidate for candidate in candidates if candidate]
+    return sorted(
+        visible,
+        key=lambda candidate: (
+            candidate.get("score") is not None,
+            safe_int(candidate.get("score"), -1),
+            safe_int(candidate.get("id")),
+        ),
+        reverse=True,
+    )
 
 
 def ensure_sqlite_user_for_kv_user(user: dict[str, Any]) -> None:
@@ -820,9 +884,21 @@ def init_db() -> None:
 
 
 def get_config() -> dict[str, str]:
+    defaults = {
+        "deepseek_model": "deepseek-chat",
+        "tavily_max_results": "8",
+        "max_web_pages": "50",
+        "search_provider": "tavily",
+    }
+    if kv_enabled():
+        stored = kv_get_json(kv_config_key())
+        if isinstance(stored, dict):
+            defaults.update({str(key): str(value) for key, value in stored.items()})
+        return defaults
     with db() as conn:
         rows = conn.execute("SELECT key, value FROM config").fetchall()
-    return {row["key"]: row["value"] for row in rows}
+    defaults.update({row["key"]: row["value"] for row in rows})
+    return defaults
 
 
 def set_config(values: dict[str, Any]) -> None:
@@ -834,6 +910,20 @@ def set_config(values: dict[str, Any]) -> None:
         "max_web_pages",
         "search_provider",
     }
+    if kv_enabled():
+        config = get_config()
+        for key, value in values.items():
+            if key not in allowed or value is None:
+                continue
+            text = str(value).strip()
+            if not text:
+                continue
+            if text == "__clear__":
+                config.pop(key, None)
+            else:
+                config[key] = text
+        kv_set_json(kv_config_key(), config)
+        return
     with db() as conn:
         for key, value in values.items():
             if key not in allowed:
@@ -860,9 +950,10 @@ def audit(actor: str, action: str, payload: dict[str, Any]) -> None:
         )
 
 
-def project_to_api(row: sqlite3.Row) -> dict[str, Any]:
+def project_to_api(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     data = dict(row)
-    data["profile"] = json.loads(data.pop("profile_json"))
+    if "profile_json" in data:
+        data["profile"] = json.loads(data.pop("profile_json"))
     data["saved"] = bool(data["saved"])
     return data
 
@@ -905,11 +996,61 @@ def infer_project_title(profile: dict[str, Any], answers: list[dict[str, Any]] |
     return "图表创作人才"
 
 
-def candidate_to_api(row: sqlite3.Row) -> dict[str, Any]:
+def candidate_to_api(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     data = dict(row)
     for field in JSON_FIELDS:
         data[field] = from_json_text(data.get(field))
     return data
+
+
+def get_project(project_id: int) -> dict[str, Any] | None:
+    if kv_enabled():
+        project = kv_get_project(project_id)
+        return project_to_api(project) if project else None
+    with db() as conn:
+        row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    return project_to_api(row) if row else None
+
+
+def list_projects(user: dict[str, Any]) -> list[dict[str, Any]]:
+    if kv_enabled():
+        return [project_to_api(project) for project in kv_list_projects(user)]
+    with db() as conn:
+        if str(user["role"]) == "admin":
+            rows = conn.execute("SELECT * FROM projects ORDER BY updated_at DESC").fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM projects WHERE created_by = ? ORDER BY updated_at DESC",
+                (user["id"],),
+            ).fetchall()
+    return [project_to_api(row) for row in rows]
+
+
+def create_project_record(title: str, profile: dict[str, Any], saved: int, user_id: int) -> dict[str, Any]:
+    now = now_iso()
+    if kv_enabled():
+        project = {
+            "id": kv_next_id("projects"),
+            "title": title,
+            "profile": profile,
+            "saved": bool(saved),
+            "status": "进行中",
+            "created_by": int(user_id),
+            "created_at": now,
+            "updated_at": now,
+        }
+        kv_save_project(project)
+        return project
+    with db() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO projects (title, profile_json, saved, status, created_by, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (title, json.dumps(profile, ensure_ascii=False), saved, "进行中", user_id, now, now),
+        )
+        row = conn.execute("SELECT * FROM projects WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    return project_to_api(row)
 
 
 def safe_int(value: Any, default: int = 0) -> int:
@@ -1335,6 +1476,21 @@ def normalize_candidate_payload(project_id: int, payload: dict[str, Any]) -> dic
 
 def insert_candidates(project_id: int, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     created: list[dict[str, Any]] = []
+    if kv_enabled():
+        for item in candidates:
+            normalized = normalize_candidate_payload(project_id, item)
+            now = now_iso()
+            candidate = {
+                "id": kv_next_id("candidates"),
+                **normalized,
+                "created_at": now,
+                "updated_at": now,
+            }
+            for field in JSON_FIELDS:
+                candidate[field] = from_json_text(candidate.get(field))
+            kv_save_candidate(candidate)
+            created.append(candidate)
+        return created
     with db() as conn:
         for item in candidates:
             normalized = normalize_candidate_payload(project_id, item)
@@ -1553,6 +1709,8 @@ def create_xlsx(candidates: list[dict[str, Any]]) -> bytes:
 
 
 def candidates_for_project(project_id: int) -> list[dict[str, Any]]:
+    if kv_enabled():
+        return [candidate_to_api(candidate) for candidate in kv_list_candidates(project_id)]
     with db() as conn:
         rows = conn.execute("SELECT * FROM candidates WHERE project_id = ? ORDER BY score IS NULL, score DESC, id DESC", (project_id,)).fetchall()
     return [candidate_to_api(row) for row in rows]
@@ -1766,25 +1924,15 @@ class TalentMapHandler(BaseHTTPRequestHandler):
             )
             return
         if path == "/api/projects":
-            with db() as conn:
-                if str(user["role"]) == "admin":
-                    rows = conn.execute("SELECT * FROM projects ORDER BY updated_at DESC").fetchall()
-                else:
-                    rows = conn.execute(
-                        "SELECT * FROM projects WHERE created_by = ? ORDER BY updated_at DESC",
-                        (user["id"],),
-                    ).fetchall()
-            self.send_json({"projects": [project_to_api(row) for row in rows]})
+            self.send_json({"projects": list_projects(user)})
             return
         project_match = re.fullmatch(r"/api/projects/(\d+)", path)
         if project_match:
             project_id = safe_int(project_match.group(1))
-            with db() as conn:
-                row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-            if not row:
+            project = get_project(project_id)
+            if not project:
                 self.send_json({"error": "项目不存在"}, 404)
                 return
-            project = project_to_api(row)
             self.send_json({"project": project, "plan": build_search_plan(project["profile"])})
             return
         candidates_match = re.fullmatch(r"/api/projects/(\d+)/candidates", path)
@@ -1827,12 +1975,10 @@ class TalentMapHandler(BaseHTTPRequestHandler):
         report_match = re.fullmatch(r"/api/projects/(\d+)/report.html", path)
         if report_match:
             project_id = safe_int(report_match.group(1))
-            with db() as conn:
-                row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-            if not row:
+            project = get_project(project_id)
+            if not project:
                 self.send_json({"error": "项目不存在"}, 404)
                 return
-            project = project_to_api(row)
             html = build_report_html(project, candidates_for_project(project_id))
             self.send_bytes(html.encode("utf-8"), "text/html; charset=utf-8", "talent-report.html")
             return
@@ -1888,28 +2034,20 @@ class TalentMapHandler(BaseHTTPRequestHandler):
             profile = build_profile_from_answers(answers, payload.get("profile") if isinstance(payload.get("profile"), dict) else {})
             title = str(payload.get("title") or infer_project_title(profile, answers)).strip()
             saved = 1 if payload.get("saved", True) else 0
-            with db() as conn:
-                cursor = conn.execute(
-                    """
-                    INSERT INTO projects (title, profile_json, saved, status, created_by, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (title, json.dumps(profile, ensure_ascii=False), saved, "进行中", user["id"], now_iso(), now_iso()),
-                )
-                row = conn.execute("SELECT * FROM projects WHERE id = ?", (cursor.lastrowid,)).fetchone()
-            project = project_to_api(row)
+            if os.getenv("VERCEL") and not kv_enabled():
+                self.send_json({"error": "线上项目存储需要配置 Redis 环境变量并重新部署。"}, 503)
+                return
+            project = create_project_record(title, profile, saved, int(user["id"]))
             audit(user["email"], "create_project", {"project_id": project["id"], "title": title})
             self.send_json({"project": project, "plan": build_search_plan(profile)}, 201)
             return
         plan_match = re.fullmatch(r"/api/projects/(\d+)/plan", path)
         if plan_match:
             project_id = safe_int(plan_match.group(1))
-            with db() as conn:
-                row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-            if not row:
+            project = get_project(project_id)
+            if not project:
                 self.send_json({"error": "项目不存在"}, 404)
                 return
-            project = project_to_api(row)
             self.send_json({"plan": build_search_plan(project["profile"])})
             return
         discover_match = re.fullmatch(r"/api/projects/(\d+)/discover", path)
@@ -1979,6 +2117,18 @@ class TalentMapHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": "没有可更新字段"}, 400)
                 return
             updates["updated_at"] = now_iso()
+            if kv_enabled():
+                candidate = kv_get_candidate(candidate_id)
+                if not candidate:
+                    self.send_json({"error": "候选人不存在"}, 404)
+                    return
+                for field in JSON_FIELDS:
+                    if field in updates:
+                        updates[field] = from_json_text(updates[field])
+                candidate.update(updates)
+                kv_save_candidate(candidate)
+                self.send_json({"candidate": candidate_to_api(candidate)})
+                return
             set_clause = ", ".join([f"{key} = :{key}" for key in updates])
             with db() as conn:
                 updates["id"] = candidate_id
@@ -2181,15 +2331,13 @@ class TalentMapHandler(BaseHTTPRequestHandler):
         self.send_json({"token": token, "user": user_to_api(user)}, 201)
 
     def api_discover(self, project_id: int, user: dict[str, Any]) -> None:
-        with db() as conn:
-            row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-        if not row:
+        project = get_project(project_id)
+        if not project:
             self.send_json({"error": "项目不存在"}, 404)
             return
         if not has_search_quota(user):
             self.send_json({"error": "免费检索体验已使用完，请联系管理员开通更多次数。"}, 403)
             return
-        project = project_to_api(row)
         profile = project["profile"]
         plan = build_search_plan(profile)
         config = get_config()
@@ -2317,12 +2465,10 @@ class TalentMapHandler(BaseHTTPRequestHandler):
         payload = self.read_json()
         links = [link for link in normalize_list(payload.get("links")) if link.startswith(("http://", "https://"))][:20]
         config = get_config()
-        with db() as conn:
-            row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-        if not row:
+        project = get_project(project_id)
+        if not project:
             self.send_json({"error": "项目不存在"}, 404)
             return
-        project = project_to_api(row)
         sources: list[dict[str, str]] = []
         errors: list[str] = []
         for link in links:
@@ -2350,6 +2496,10 @@ class TalentMapHandler(BaseHTTPRequestHandler):
         self.send_json({"ok": True, "message": message, "sources": len(sources), "errors": errors, "candidates": created})
 
     def api_import_file(self, project_id: int, user: dict[str, Any]) -> None:
+        project = get_project(project_id)
+        if not project:
+            self.send_json({"error": "项目不存在"}, 404)
+            return
         content_type = self.headers.get("Content-Type", "")
         parts = parse_multipart(content_type, self.read_body())
         file_part = parts.get("file")
@@ -2372,10 +2522,7 @@ class TalentMapHandler(BaseHTTPRequestHandler):
         elif suffix == ".pdf":
             text = extract_pdf_text(content)
             config = get_config()
-            with db() as conn:
-                row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-            if text and row and (config.get("deepseek_api_key") or os.getenv("DEEPSEEK_API_KEY")):
-                project = project_to_api(row)
+            if text and (config.get("deepseek_api_key") or os.getenv("DEEPSEEK_API_KEY")):
                 extracted = extract_candidates_with_ai(f"简历文件：{filename}\n{text[:20000]}", project["profile"], config)
                 for item in extracted:
                     item["status"] = "待确认"
