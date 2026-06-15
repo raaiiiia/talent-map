@@ -575,7 +575,7 @@ function setView(view) {
   render();
 }
 
-async function refreshAll({ keepNotice = false } = {}) {
+async function refreshAll({ keepNotice = false, autoSelectProject = true } = {}) {
   if (!keepNotice) showNotice("");
   const projectsData = await api("/api/projects");
   state.projects = projectsData.projects || [];
@@ -585,7 +585,7 @@ async function refreshAll({ keepNotice = false } = {}) {
     state.plan = null;
     state.candidates = [];
   }
-  if (!state.activeProjectId && state.projects.length) {
+  if (autoSelectProject && !state.activeProjectId && state.projects.length) {
     state.activeProjectId = state.projects[0].id;
   }
   if (state.activeProjectId) {
@@ -604,11 +604,22 @@ async function loadProject(id) {
   localStorage.setItem("talent_map_active_project", String(id));
 }
 
-async function loadMeAndProjects() {
+async function loadMeAndProjects({ autoSelectProject = true } = {}) {
   const [me, config] = await Promise.all([api("/api/me"), api("/api/config")]);
   state.user = me.user;
   state.config = config.config;
-  await refreshAll({ keepNotice: true });
+  await refreshAll({ keepNotice: true, autoSelectProject });
+}
+
+function resetToNewProjectWizard() {
+  state.project = null;
+  state.plan = null;
+  state.candidates = [];
+  state.activeProjectId = null;
+  state.wizardAnswers = [];
+  state.wizardStarted = false;
+  state.thinking = false;
+  localStorage.removeItem("talent_map_active_project");
 }
 
 function showApp() {
@@ -1949,9 +1960,12 @@ async function handleSubmit(event) {
       localStorage.setItem("talent_map_token", state.token);
       clearRegisterFields();
       clearLoginFields();
+      resetToNewProjectWizard();
       showApp();
       showNotice("");
-      await loadMeAndProjects();
+      renderShell();
+      setView("wizard");
+      await loadMeAndProjects({ autoSelectProject: false });
       showNotice("注册成功，已获得 1 次免费检索体验。", "success");
     } catch (error) {
       showNotice(error.message, "error");
@@ -2336,14 +2350,7 @@ async function init() {
     }
   });
   byId("newProjectBtn").addEventListener("click", () => {
-    state.project = null;
-    state.plan = null;
-    state.candidates = [];
-    state.activeProjectId = null;
-    state.wizardAnswers = [];
-    state.wizardStarted = false;
-    state.thinking = false;
-    localStorage.removeItem("talent_map_active_project");
+    resetToNewProjectWizard();
     setView("wizard");
   });
   byId("logoutBtn").addEventListener("click", () => {

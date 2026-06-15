@@ -53,12 +53,16 @@ load_env_file(BASE_DIR / ".env")
 
 STATIC_DIR = BASE_DIR / "static"
 DATA_DIR = Path(tempfile.gettempdir()) / "talent_map_data" if os.getenv("VERCEL") else BASE_DIR / "data"
-DB_PATH = DATA_DIR / "talent_map.sqlite3"
+configured_db_path = os.getenv("TALENT_MAP_DB_PATH", "").strip()
+DB_PATH = Path(configured_db_path).expanduser() if configured_db_path else DATA_DIR / "talent_map.sqlite3"
+if not DB_PATH.is_absolute():
+    DB_PATH = BASE_DIR / DB_PATH
 FALLBACK_DB_PATH = DATA_DIR / "talent_map.app.sqlite3"
 LOCAL_TZ = timezone(timedelta(hours=8))
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 KV_PREFIX = os.getenv("TALENT_MAP_KV_PREFIX", "talent_map").strip() or "talent_map"
 KV_USER_ID_OFFSET = 1_000_000
+KV_BUILTIN_ADMIN_ID = KV_USER_ID_OFFSET - 1
 SESSION_TTL_SECONDS = 14 * 24 * 60 * 60
 
 DEFAULT_PROFILE = {
@@ -462,6 +466,60 @@ def ensure_sqlite_user_for_kv_user(user: dict[str, Any]) -> None:
         )
 
 
+def admin_credentials() -> tuple[str, str, str, bool]:
+    email = os.getenv("TALENT_MAP_ADMIN_EMAIL", "admin@local").strip().lower() or "admin@local"
+    name = os.getenv("TALENT_MAP_ADMIN_NAME", "Admin").strip() or "Admin"
+    configured_password = os.getenv("TALENT_MAP_ADMIN_PASSWORD")
+    if configured_password:
+        return email, name, configured_password, True
+    password = uuid.uuid4().hex if os.getenv("VERCEL") else "admin123"
+    return email, name, password, False
+
+
+def ensure_builtin_admin(conn: sqlite3.Connection) -> None:
+    admin_email, admin_name, admin_password, password_is_configured = admin_credentials()
+    existing = conn.execute("SELECT * FROM users WHERE email = ?", (admin_email,)).fetchone()
+    if existing:
+        fields = {
+            "name": admin_name,
+            "role": "admin",
+            "email_verified": 1,
+            "free_searches_remaining": 0,
+        }
+        if password_is_configured or not existing["password_hash"]:
+            fields["password_hash"] = pbkdf2_hash(admin_password)
+        assignments = ", ".join(f"{key} = ?" for key in fields)
+        conn.execute(
+            f"UPDATE users SET {assignments} WHERE id = ?",
+            (*fields.values(), existing["id"]),
+        )
+        return
+    conn.execute(
+        """
+        INSERT INTO users (email, name, role, password_hash, created_at, email_verified, free_searches_remaining)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (admin_email, admin_name, "admin", pbkdf2_hash(admin_password), now_iso(), 1, 0),
+    )
+
+
+def ensure_kv_builtin_admin() -> None:
+    admin_email, admin_name, admin_password, password_is_configured = admin_credentials()
+    existing = kv_get_user_by_email(admin_email)
+    user = dict(existing or {})
+    user.setdefault("id", KV_BUILTIN_ADMIN_ID)
+    user["email"] = admin_email
+    user["name"] = admin_name
+    user["role"] = "admin"
+    user.setdefault("created_at", now_iso())
+    user["email_verified"] = 1
+    user["free_searches_remaining"] = 0
+    if password_is_configured or not user.get("password_hash"):
+        user["password_hash"] = pbkdf2_hash(admin_password)
+    kv_save_user(user)
+    ensure_sqlite_user_for_kv_user(user)
+
+
 def kv_create_session(user_id: int) -> str:
     token = secrets.token_urlsafe(32)
     kv_command("SET", kv_session_key(token), user_id, "EX", SESSION_TTL_SECONDS)
@@ -745,20 +803,7 @@ def init_db() -> None:
                 conn.execute(statement)
         ensure_column(conn, "users", "email_verified", "email_verified INTEGER NOT NULL DEFAULT 1")
         ensure_column(conn, "users", "free_searches_remaining", "free_searches_remaining INTEGER NOT NULL DEFAULT 0")
-        existing = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
-        if existing == 0:
-            admin_email = os.getenv("TALENT_MAP_ADMIN_EMAIL", "admin@local").strip().lower()
-            admin_name = os.getenv("TALENT_MAP_ADMIN_NAME", "管理员").strip() or "管理员"
-            admin_password = os.getenv("TALENT_MAP_ADMIN_PASSWORD")
-            if not admin_password:
-                admin_password = uuid.uuid4().hex if os.getenv("VERCEL") else "admin123"
-            conn.execute(
-                """
-                INSERT INTO users (email, name, role, password_hash, created_at, email_verified, free_searches_remaining)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (admin_email, admin_name, "管理员", pbkdf2_hash(admin_password), now_iso(), 1, 0),
-            )
+        ensure_builtin_admin(conn)
         defaults = {
             "deepseek_model": "deepseek-chat",
             "tavily_max_results": "8",
@@ -767,6 +812,11 @@ def init_db() -> None:
         }
         for key, value in defaults.items():
             conn.execute("INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)", (key, value))
+    if kv_enabled():
+        try:
+            ensure_kv_builtin_admin()
+        except RuntimeError:
+            pass
 
 
 def get_config() -> dict[str, str]:
@@ -1717,7 +1767,13 @@ class TalentMapHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/projects":
             with db() as conn:
-                rows = conn.execute("SELECT * FROM projects ORDER BY updated_at DESC").fetchall()
+                if str(user["role"]) == "admin":
+                    rows = conn.execute("SELECT * FROM projects ORDER BY updated_at DESC").fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT * FROM projects WHERE created_by = ? ORDER BY updated_at DESC",
+                        (user["id"],),
+                    ).fetchall()
             self.send_json({"projects": [project_to_api(row) for row in rows]})
             return
         project_match = re.fullmatch(r"/api/projects/(\d+)", path)
@@ -2177,8 +2233,19 @@ class TalentMapHandler(BaseHTTPRequestHandler):
                     break
         if sources:
             save_sources(project_id, sources)
-        if is_metered_user(user) and not consume_free_search(user["id"]):
-            self.send_json({"error": "免费检索体验已使用完，请联系管理员开通更多次数。"}, 403)
+        if not sources:
+            detail = errors[0] if errors else "当前检索式没有返回公开网页结果"
+            audit(user["email"], "discover_candidates_failed", {"project_id": project_id, "reason": detail})
+            self.send_json(
+                {
+                    "ok": False,
+                    "message": f"未检索到可用于候选人抽取的公开来源：{detail}。本次未扣除检索次数，请检查检索条件或稍后重试。",
+                    "plan": plan,
+                    "sources": 0,
+                    "errors": errors,
+                    "candidates": [],
+                }
+            )
             return
         if not (config.get("deepseek_api_key") or os.getenv("DEEPSEEK_API_KEY")):
             self.send_json(
@@ -2209,6 +2276,23 @@ class TalentMapHandler(BaseHTTPRequestHandler):
                 }
             )
             return
+        if not extracted:
+            audit(
+                user["email"],
+                "discover_candidates_failed",
+                {"project_id": project_id, "reason": "no_candidates_extracted", "sources": len(sources)},
+            )
+            self.send_json(
+                {
+                    "ok": False,
+                    "message": "已找到公开来源，但未能抽取出可核验的候选人。本次未扣除检索次数，请补充目标公司、岗位关键词或候选人所在平台后重试。",
+                    "plan": plan,
+                    "sources": len(sources),
+                    "errors": errors,
+                    "candidates": [],
+                }
+            )
+            return
         if len(extracted) > safe_int(profile.get("max_candidates_before_narrowing"), 50):
             self.send_json(
                 {
@@ -2219,6 +2303,9 @@ class TalentMapHandler(BaseHTTPRequestHandler):
                     "preview_count": len(extracted),
                 }
             )
+            return
+        if is_metered_user(user) and not consume_free_search(user["id"]):
+            self.send_json({"error": "免费检索体验已使用完，请联系管理员开通更多次数。"}, 403)
             return
         for item in extracted:
             item.setdefault("raw_evidence", "Tavily公开检索 + DeepSeek辅助抽取，需人工确认。")
