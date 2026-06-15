@@ -1211,14 +1211,14 @@ def build_search_plan(profile: dict[str, Any]) -> dict[str, Any]:
         competitor_pool = list(dict.fromkeys(company_types))
         focus_terms = algorithm_tags[:4] or ["推荐算法", "搜索排序", "多模态", "机器学习"]
         query_seeds = []
+        for index, company in enumerate(competitor_pool[:8]):
+            focus = focus_terms[index % len(focus_terms)]
+            query_seeds.append(f"{company} {focus} 算法工程师 技术分享 姓名")
+            query_seeds.append(f"{company} {focus} 算法 论文 专利 发明人")
         for city in cities[:4]:
             for focus in focus_terms[:3]:
                 query_seeds.append(f"{city} {focus} 算法工程师 GitHub 技术分享")
-                query_seeds.append(f"{city} {focus} 算法工程师 论文 专利")
             query_seeds.append(f"site:github.com {city} 算法工程师 Python PyTorch")
-        for company in competitor_pool[:8]:
-            query_seeds.append(f"{company} 算法工程师 推荐 搜索 多模态 技术分享")
-            query_seeds.append(f"{company} 算法工程师 论文 专利 GitHub")
         queries = list(dict.fromkeys(query_seeds))[:18]
         narrow_questions = [
             "优先锁定推荐、搜索、NLP、多模态还是广告算法方向？",
@@ -1443,6 +1443,31 @@ def extract_candidates_with_ai(corpus: str, profile: dict[str, Any], config: dic
     else:
         candidates = []
     return [item for item in candidates if isinstance(item, dict) and item.get("name")]
+
+
+def build_extraction_corpus(sources: list[dict[str, str]], limit: int = 40000) -> str:
+    sections: list[str] = []
+    total = 0
+    for source in sources:
+        summary = str(source.get("summary") or "").strip()
+        content = str(source.get("content") or "").strip()
+        evidence = summary[:900]
+        if content and content not in evidence:
+            evidence = f"{evidence}\n正文摘录：{content[:900]}".strip()
+        section = (
+            f"检索词：{source.get('query', '')}\n"
+            f"标题：{source.get('title', '')}\n"
+            f"链接：{source.get('url', '')}\n"
+            f"证据摘要：{evidence}"
+        )
+        if total + len(section) > limit:
+            remaining = limit - total
+            if remaining > 300:
+                sections.append(section[:remaining])
+            break
+        sections.append(section)
+        total += len(section) + 7
+    return "\n\n---\n\n".join(sections)
 
 
 def tavily_search(query: str, config: dict[str, str], max_results: int) -> list[dict[str, str]]:
@@ -2475,6 +2500,8 @@ class TalentMapHandler(BaseHTTPRequestHandler):
                         "url": url,
                         "title": result.get("title", ""),
                         "content": result.get("raw_content") or result.get("content") or "",
+                        "summary": result.get("content") or "",
+                        "query": query,
                         "source_type": "tavily_public_search",
                     }
                 )
@@ -2504,13 +2531,15 @@ class TalentMapHandler(BaseHTTPRequestHandler):
                     "plan": plan,
                     "sources": len(sources),
                     "errors": errors,
+                    "source_preview": [
+                        {"title": source.get("title", ""), "url": source.get("url", "")}
+                        for source in sources[:10]
+                    ],
                     "candidates": [],
                 }
             )
             return
-        corpus = "\n\n---\n\n".join(
-            f"标题：{source.get('title','')}\n链接：{source.get('url','')}\n正文：{source.get('content','')[:5000]}" for source in sources[:20]
-        )
+        corpus = build_extraction_corpus(sources)
         try:
             extracted = extract_candidates_with_ai(corpus, profile, config)
         except RuntimeError as exc:
@@ -2521,6 +2550,10 @@ class TalentMapHandler(BaseHTTPRequestHandler):
                     "plan": plan,
                     "sources": len(sources),
                     "errors": errors,
+                    "source_preview": [
+                        {"title": source.get("title", ""), "url": source.get("url", "")}
+                        for source in sources[:10]
+                    ],
                     "candidates": [],
                 }
             )
@@ -2538,6 +2571,10 @@ class TalentMapHandler(BaseHTTPRequestHandler):
                     "plan": plan,
                     "sources": len(sources),
                     "errors": errors,
+                    "source_preview": [
+                        {"title": source.get("title", ""), "url": source.get("url", "")}
+                        for source in sources[:10]
+                    ],
                     "candidates": [],
                 }
             )
