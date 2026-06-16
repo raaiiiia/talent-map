@@ -1365,7 +1365,7 @@ def github_api_headers() -> dict[str, str]:
     return headers
 
 
-def technical_github_queries(profile: dict[str, Any], limit: int = 3) -> list[str]:
+def technical_github_queries(profile: dict[str, Any], limit: int = 2) -> list[str]:
     profile_text = json.dumps(profile, ensure_ascii=False).lower()
     cities: list[str] = []
     city_aliases = [
@@ -1408,9 +1408,9 @@ def technical_github_queries(profile: dict[str, Any], limit: int = 3) -> list[st
     return list(dict.fromkeys(queries))[:limit]
 
 
-def github_search_users(query: str, per_page: int = 3) -> list[dict[str, Any]]:
+def github_search_users(query: str, per_page: int = 2) -> list[dict[str, Any]]:
     params = urlencode({"q": query, "per_page": min(max(per_page, 1), 10)})
-    data = call_json_get(f"https://api.github.com/search/users?{params}", github_api_headers(), timeout=5)
+    data = call_json_get(f"https://api.github.com/search/users?{params}", github_api_headers(), timeout=3)
     if isinstance(data, dict):
         items = data.get("items", [])
         return [item for item in items if isinstance(item, dict)]
@@ -1421,7 +1421,7 @@ def github_fetch_user(login: str) -> dict[str, Any]:
     clean_login = re.sub(r"[^A-Za-z0-9-]", "", login)[:80]
     if not clean_login:
         raise RuntimeError("empty GitHub login")
-    data = call_json_get(f"https://api.github.com/users/{quote(clean_login)}", github_api_headers(), timeout=5)
+    data = call_json_get(f"https://api.github.com/users/{quote(clean_login)}", github_api_headers(), timeout=3)
     return data if isinstance(data, dict) else {}
 
 
@@ -1430,7 +1430,7 @@ def github_fetch_repos(login: str, limit: int = 5) -> list[dict[str, Any]]:
     if not clean_login:
         return []
     params = urlencode({"sort": "updated", "per_page": min(max(limit, 1), 8)})
-    data = call_json_get(f"https://api.github.com/users/{quote(clean_login)}/repos?{params}", github_api_headers(), timeout=5)
+    data = call_json_get(f"https://api.github.com/users/{quote(clean_login)}/repos?{params}", github_api_headers(), timeout=3)
     if isinstance(data, list):
         return [repo for repo in data if isinstance(repo, dict)]
     return []
@@ -1513,7 +1513,7 @@ def github_profile_to_candidate(
     return candidate, source
 
 
-def discover_github_technical_candidates(profile: dict[str, Any], limit: int = 4) -> tuple[list[dict[str, Any]], list[dict[str, str]], list[str]]:
+def discover_github_technical_candidates(profile: dict[str, Any], limit: int = 3) -> tuple[list[dict[str, Any]], list[dict[str, str]], list[str]]:
     candidates: list[dict[str, Any]] = []
     sources: list[dict[str, str]] = []
     errors: list[str] = []
@@ -1522,7 +1522,7 @@ def discover_github_technical_candidates(profile: dict[str, Any], limit: int = 4
         if len(candidates) >= limit:
             break
         try:
-            users = github_search_users(query, per_page=3)
+            users = github_search_users(query, per_page=2)
         except RuntimeError as exc:
             errors.append(f"GitHub {query}: {exc}")
             continue
@@ -1535,7 +1535,7 @@ def discover_github_technical_candidates(profile: dict[str, Any], limit: int = 4
             seen_logins.add(login.lower())
             try:
                 user_data = github_fetch_user(login)
-                repos = github_fetch_repos(login, limit=3)
+                repos = github_fetch_repos(login, limit=2)
             except RuntimeError as exc:
                 errors.append(f"GitHub {login}: {exc}")
                 continue
@@ -2677,6 +2677,36 @@ class TalentMapHandler(BaseHTTPRequestHandler):
         if is_technical_profile(profile):
             max_pages = min(max_pages, 24)
             max_results = min(max_results, 5)
+        sources: list[dict[str, str]] = []
+        errors: list[str] = []
+        seen: set[str] = set()
+        if is_technical_profile(profile):
+            fallback_candidates, fallback_sources, fallback_errors = discover_github_technical_candidates(profile)
+            errors.extend(fallback_errors[:8])
+            if fallback_sources:
+                save_sources(project_id, fallback_sources)
+                sources.extend(fallback_sources)
+            if fallback_candidates:
+                if is_metered_user(user) and not consume_free_search(user["id"]):
+                    self.send_json({"error": "免费检索体验已使用完，请联系管理员开通更多次数。"}, 403)
+                    return
+                created = insert_candidates(project_id, fallback_candidates)
+                audit(
+                    user["email"],
+                    "discover_candidates_github_first",
+                    {"project_id": project_id, "sources": len(sources), "created": len(created)},
+                )
+                self.send_json(
+                    {
+                        "ok": True,
+                        "message": "已通过 GitHub 公开资料生成技术候选人线索；这些线索需人工复核求职意愿和当前任职状态。",
+                        "plan": plan,
+                        "sources": len(sources),
+                        "errors": errors,
+                        "candidates": created,
+                    }
+                )
+                return
         if not (config.get("tavily_api_key") or os.getenv("TAVILY_API_KEY")):
             self.send_json(
                 {
@@ -2687,9 +2717,6 @@ class TalentMapHandler(BaseHTTPRequestHandler):
                 }
             )
             return
-        sources: list[dict[str, str]] = []
-        errors: list[str] = []
-        seen: set[str] = set()
         for query in plan["queries"]:
             if len(sources) >= max_pages:
                 break
