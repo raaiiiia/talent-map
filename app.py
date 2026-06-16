@@ -1340,7 +1340,7 @@ def call_json_api(url: str, payload: dict[str, Any], headers: dict[str, str], ti
         raise RuntimeError(str(exc)) from exc
 
 
-def call_json_get(url: str, headers: dict[str, str] | None = None, timeout: int = 12) -> dict[str, Any] | list[Any]:
+def call_json_get(url: str, headers: dict[str, str] | None = None, timeout: int = 6) -> dict[str, Any] | list[Any]:
     req = urlrequest.Request(url, headers=headers or {}, method="GET")
     try:
         with urlrequest.urlopen(req, timeout=timeout) as resp:
@@ -1365,7 +1365,7 @@ def github_api_headers() -> dict[str, str]:
     return headers
 
 
-def technical_github_queries(profile: dict[str, Any], limit: int = 8) -> list[str]:
+def technical_github_queries(profile: dict[str, Any], limit: int = 3) -> list[str]:
     profile_text = json.dumps(profile, ensure_ascii=False).lower()
     cities: list[str] = []
     city_aliases = [
@@ -1408,9 +1408,9 @@ def technical_github_queries(profile: dict[str, Any], limit: int = 8) -> list[st
     return list(dict.fromkeys(queries))[:limit]
 
 
-def github_search_users(query: str, per_page: int = 5) -> list[dict[str, Any]]:
+def github_search_users(query: str, per_page: int = 3) -> list[dict[str, Any]]:
     params = urlencode({"q": query, "per_page": min(max(per_page, 1), 10)})
-    data = call_json_get(f"https://api.github.com/search/users?{params}", github_api_headers(), timeout=10)
+    data = call_json_get(f"https://api.github.com/search/users?{params}", github_api_headers(), timeout=5)
     if isinstance(data, dict):
         items = data.get("items", [])
         return [item for item in items if isinstance(item, dict)]
@@ -1421,7 +1421,7 @@ def github_fetch_user(login: str) -> dict[str, Any]:
     clean_login = re.sub(r"[^A-Za-z0-9-]", "", login)[:80]
     if not clean_login:
         raise RuntimeError("empty GitHub login")
-    data = call_json_get(f"https://api.github.com/users/{quote(clean_login)}", github_api_headers(), timeout=10)
+    data = call_json_get(f"https://api.github.com/users/{quote(clean_login)}", github_api_headers(), timeout=5)
     return data if isinstance(data, dict) else {}
 
 
@@ -1430,7 +1430,7 @@ def github_fetch_repos(login: str, limit: int = 5) -> list[dict[str, Any]]:
     if not clean_login:
         return []
     params = urlencode({"sort": "updated", "per_page": min(max(limit, 1), 8)})
-    data = call_json_get(f"https://api.github.com/users/{quote(clean_login)}/repos?{params}", github_api_headers(), timeout=10)
+    data = call_json_get(f"https://api.github.com/users/{quote(clean_login)}/repos?{params}", github_api_headers(), timeout=5)
     if isinstance(data, list):
         return [repo for repo in data if isinstance(repo, dict)]
     return []
@@ -1513,7 +1513,7 @@ def github_profile_to_candidate(
     return candidate, source
 
 
-def discover_github_technical_candidates(profile: dict[str, Any], limit: int = 8) -> tuple[list[dict[str, Any]], list[dict[str, str]], list[str]]:
+def discover_github_technical_candidates(profile: dict[str, Any], limit: int = 4) -> tuple[list[dict[str, Any]], list[dict[str, str]], list[str]]:
     candidates: list[dict[str, Any]] = []
     sources: list[dict[str, str]] = []
     errors: list[str] = []
@@ -1522,7 +1522,7 @@ def discover_github_technical_candidates(profile: dict[str, Any], limit: int = 8
         if len(candidates) >= limit:
             break
         try:
-            users = github_search_users(query, per_page=5)
+            users = github_search_users(query, per_page=3)
         except RuntimeError as exc:
             errors.append(f"GitHub {query}: {exc}")
             continue
@@ -1535,7 +1535,7 @@ def discover_github_technical_candidates(profile: dict[str, Any], limit: int = 8
             seen_logins.add(login.lower())
             try:
                 user_data = github_fetch_user(login)
-                repos = github_fetch_repos(login, limit=5)
+                repos = github_fetch_repos(login, limit=3)
             except RuntimeError as exc:
                 errors.append(f"GitHub {login}: {exc}")
                 continue
@@ -2674,6 +2674,9 @@ class TalentMapHandler(BaseHTTPRequestHandler):
         config = get_config()
         max_pages = min(max(safe_int(config.get("max_web_pages"), 50), 1), 80)
         max_results = min(max(safe_int(config.get("tavily_max_results"), 8), 1), 10)
+        if is_technical_profile(profile):
+            max_pages = min(max_pages, 24)
+            max_results = min(max_results, 5)
         if not (config.get("tavily_api_key") or os.getenv("TAVILY_API_KEY")):
             self.send_json(
                 {
