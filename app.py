@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, urlencode, unquote, urlparse
 from xml.etree import ElementTree as ET
 
 
@@ -1340,6 +1340,211 @@ def call_json_api(url: str, payload: dict[str, Any], headers: dict[str, str], ti
         raise RuntimeError(str(exc)) from exc
 
 
+def call_json_get(url: str, headers: dict[str, str] | None = None, timeout: int = 12) -> dict[str, Any] | list[Any]:
+    req = urlrequest.Request(url, headers=headers or {}, method="GET")
+    try:
+        with urlrequest.urlopen(req, timeout=timeout) as resp:
+            data = resp.read().decode("utf-8", errors="replace")
+            return json.loads(data)
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(format_http_error(exc.code, detail)) from exc
+    except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def github_api_headers() -> dict[str, str]:
+    headers = {
+        "User-Agent": "TalentMap/1.0 candidate-discovery",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = os.getenv("GITHUB_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def technical_github_queries(profile: dict[str, Any], limit: int = 8) -> list[str]:
+    profile_text = json.dumps(profile, ensure_ascii=False).lower()
+    cities: list[str] = []
+    city_aliases = [
+        ("杭州", "Hangzhou"),
+        ("上海", "Shanghai"),
+        ("苏州", "Suzhou"),
+        ("南京", "Nanjing"),
+        ("北京", "Beijing"),
+        ("深圳", "Shenzhen"),
+        ("广州", "Guangzhou"),
+    ]
+    for cn, en in city_aliases:
+        if cn in profile_text or en.lower() in profile_text:
+            cities.extend([en, cn])
+    if not cities:
+        cities = ["Hangzhou", "Shanghai"]
+
+    focus_terms: list[str] = []
+    term_map = [
+        ("推荐", "recommendation system"),
+        ("搜索", "search ranking"),
+        ("排序", "ranking"),
+        ("多模态", "multimodal"),
+        ("视频生成", "video generation"),
+        ("大模型", "llm"),
+        ("nlp", "nlp"),
+        ("python", "python"),
+        ("pytorch", "pytorch"),
+    ]
+    for trigger, term in term_map:
+        if trigger in profile_text:
+            focus_terms.append(term)
+    focus_terms.extend(["machine learning", "deep learning", "pytorch"])
+    focus_terms = list(dict.fromkeys(focus_terms))
+
+    queries = []
+    for city in cities[:4]:
+        for term in focus_terms[:5]:
+            queries.append(f"location:{city} {term}")
+    return list(dict.fromkeys(queries))[:limit]
+
+
+def github_search_users(query: str, per_page: int = 5) -> list[dict[str, Any]]:
+    params = urlencode({"q": query, "per_page": min(max(per_page, 1), 10)})
+    data = call_json_get(f"https://api.github.com/search/users?{params}", github_api_headers(), timeout=10)
+    if isinstance(data, dict):
+        items = data.get("items", [])
+        return [item for item in items if isinstance(item, dict)]
+    return []
+
+
+def github_fetch_user(login: str) -> dict[str, Any]:
+    clean_login = re.sub(r"[^A-Za-z0-9-]", "", login)[:80]
+    if not clean_login:
+        raise RuntimeError("empty GitHub login")
+    data = call_json_get(f"https://api.github.com/users/{quote(clean_login)}", github_api_headers(), timeout=10)
+    return data if isinstance(data, dict) else {}
+
+
+def github_fetch_repos(login: str, limit: int = 5) -> list[dict[str, Any]]:
+    clean_login = re.sub(r"[^A-Za-z0-9-]", "", login)[:80]
+    if not clean_login:
+        return []
+    params = urlencode({"sort": "updated", "per_page": min(max(limit, 1), 8)})
+    data = call_json_get(f"https://api.github.com/users/{quote(clean_login)}/repos?{params}", github_api_headers(), timeout=10)
+    if isinstance(data, list):
+        return [repo for repo in data if isinstance(repo, dict)]
+    return []
+
+
+def github_profile_to_candidate(
+    profile: dict[str, Any],
+    user_data: dict[str, Any],
+    repos: list[dict[str, Any]],
+    matched_query: str,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    login = str(user_data.get("login") or "").strip()
+    html_url = str(user_data.get("html_url") or f"https://github.com/{login}").strip()
+    repo_summaries = []
+    languages = []
+    for repo in repos[:5]:
+        name = str(repo.get("name") or "").strip()
+        url = str(repo.get("html_url") or "").strip()
+        description = str(repo.get("description") or "").strip()
+        language = str(repo.get("language") or "").strip()
+        stars = safe_int(repo.get("stargazers_count"), 0)
+        if language:
+            languages.append(language)
+        if name and url:
+            suffix = f" ({language}, {stars} stars)" if language or stars else ""
+            repo_summaries.append(f"{name}{suffix}: {url} {description}".strip())
+
+    skill_tags = list(dict.fromkeys(languages + [term for term in ["GitHub", "AI", "machine learning", "Python", "PyTorch"] if term.lower() in matched_query.lower() or term in languages]))
+    if not skill_tags:
+        skill_tags = ["GitHub", "AI/algorithm public profile"]
+
+    followers = safe_int(user_data.get("followers"), 0)
+    public_repos = safe_int(user_data.get("public_repos"), 0)
+    score = min(78, 58 + min(followers, 80) // 5 + min(public_repos, 30) // 3 + min(len(repo_summaries), 5))
+    confidence = min(72, 50 + min(len(repo_summaries), 5) * 3 + (8 if user_data.get("name") else 0) + (6 if user_data.get("location") else 0))
+
+    name = str(user_data.get("name") or login).strip()
+    location = str(user_data.get("location") or profile.get("region") or "").strip()
+    company = str(user_data.get("company") or "").strip()
+    bio = str(user_data.get("bio") or "").strip()
+    source_links = [html_url] + [str(repo.get("html_url")) for repo in repos[:3] if repo.get("html_url")]
+    evidence = {
+        "login": login,
+        "name": name,
+        "company": company,
+        "location": location,
+        "bio": bio,
+        "public_repos": public_repos,
+        "followers": followers,
+        "repos": repo_summaries,
+        "matched_query": matched_query,
+    }
+    candidate = {
+        "name": name,
+        "current_company": company,
+        "title": "AI/algorithm public technical lead",
+        "city": location,
+        "years": "",
+        "skill_tags": skill_tags[:8],
+        "past_companies": [],
+        "works": repo_summaries[:5],
+        "source_links": source_links,
+        "platforms": ["GitHub"],
+        "recommendation_reason": f"GitHub public profile matched '{matched_query}'. Bio/company/location/repositories provide a verifiable technical lead for manual outreach.",
+        "risk_notes": "公开 GitHub 资料只能证明技术线索，不代表求职意愿；公司、年限和当前状态需要人工复核。",
+        "score": score,
+        "confidence": confidence,
+        "aigc_usage": "unknown",
+        "raw_evidence": json.dumps(evidence, ensure_ascii=False),
+    }
+    source = {
+        "url": html_url,
+        "title": f"GitHub: {name} ({login})",
+        "content": json.dumps(evidence, ensure_ascii=False),
+        "summary": f"{name} {company} {location} {bio} {'; '.join(repo_summaries[:3])}".strip(),
+        "query": matched_query,
+        "source_type": "github_public_profile",
+        "status": "已采集",
+    }
+    return candidate, source
+
+
+def discover_github_technical_candidates(profile: dict[str, Any], limit: int = 8) -> tuple[list[dict[str, Any]], list[dict[str, str]], list[str]]:
+    candidates: list[dict[str, Any]] = []
+    sources: list[dict[str, str]] = []
+    errors: list[str] = []
+    seen_logins: set[str] = set()
+    for query in technical_github_queries(profile):
+        if len(candidates) >= limit:
+            break
+        try:
+            users = github_search_users(query, per_page=5)
+        except RuntimeError as exc:
+            errors.append(f"GitHub {query}: {exc}")
+            continue
+        for item in users:
+            if len(candidates) >= limit:
+                break
+            login = str(item.get("login") or "").strip()
+            if not login or login.lower() in seen_logins:
+                continue
+            seen_logins.add(login.lower())
+            try:
+                user_data = github_fetch_user(login)
+                repos = github_fetch_repos(login, limit=5)
+            except RuntimeError as exc:
+                errors.append(f"GitHub {login}: {exc}")
+                continue
+            candidate, source = github_profile_to_candidate(profile, user_data, repos, query)
+            candidates.append(candidate)
+            sources.append(source)
+    return candidates, sources, errors
+
+
 def deepseek_chat(config: dict[str, str], messages: list[dict[str, str]], temperature: float = 0.2) -> str:
     api_key = config.get("deepseek_api_key") or os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
@@ -2559,6 +2764,47 @@ class TalentMapHandler(BaseHTTPRequestHandler):
             )
             return
         if not extracted:
+            fallback_candidates: list[dict[str, Any]] = []
+            fallback_sources: list[dict[str, str]] = []
+            fallback_errors: list[str] = []
+            if is_technical_profile(profile):
+                fallback_candidates, fallback_sources, fallback_errors = discover_github_technical_candidates(profile)
+                errors.extend(fallback_errors[:8])
+                if fallback_sources:
+                    save_sources(project_id, fallback_sources)
+                    sources.extend(fallback_sources)
+            if fallback_candidates:
+                if len(fallback_candidates) > safe_int(profile.get("max_candidates_before_narrowing"), 50):
+                    self.send_json(
+                        {
+                            "ok": False,
+                            "requires_narrowing": True,
+                            "message": "候选人超过50人，建议先缩小平台、城市、经验或作品类型。",
+                            "narrow_questions": plan["narrow_questions"],
+                            "preview_count": len(fallback_candidates),
+                        }
+                    )
+                    return
+                if is_metered_user(user) and not consume_free_search(user["id"]):
+                    self.send_json({"error": "免费检索体验已使用完，请联系管理员开通更多次数。"}, 403)
+                    return
+                created = insert_candidates(project_id, fallback_candidates)
+                audit(
+                    user["email"],
+                    "discover_candidates_github_fallback",
+                    {"project_id": project_id, "sources": len(sources), "created": len(created)},
+                )
+                self.send_json(
+                    {
+                        "ok": True,
+                        "message": "通用网页未抽取到可核验候选人，已改用 GitHub 公开资料生成技术候选人线索。",
+                        "plan": plan,
+                        "sources": len(sources),
+                        "errors": errors,
+                        "candidates": created,
+                    }
+                )
+                return
             audit(
                 user["email"],
                 "discover_candidates_failed",
